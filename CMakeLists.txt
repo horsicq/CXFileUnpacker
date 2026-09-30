@@ -38,7 +38,7 @@ if(NOT TARGET xxfclib::xxformats)
     target_include_directories(xxfclib_formats
         PUBLIC "${XXFORMATS_INCLUDE_DIR}"
         PRIVATE ${XXFORMATS_INCLUDE_DIRS})
-    target_compile_definitions(xxfclib_formats PUBLIC XXFC_STATIC)
+    target_compile_definitions(xxfclib_formats PUBLIC XXFC_STATIC PRIVATE XXFC_FORMATS_ONLY)
     target_link_libraries(xxfclib_formats PUBLIC ${XXFORMATS_LIBRARIES})
     target_compile_features(xxfclib_formats PRIVATE c_std_11)
     set_target_properties(xxfclib_formats PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -57,6 +57,7 @@ add_library(xfileunpacker_core STATIC
     src/supported_types.c src/supported_types.h
     "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack/xxfc_readers.c")
 target_include_directories(xfileunpacker_core PUBLIC src PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
+target_compile_definitions(xfileunpacker_core PRIVATE XXFC_FORMATS_ONLY)
 target_link_libraries(xfileunpacker_core PUBLIC xxfclib::xxformats)
 xfu_c_target(xfileunpacker_core)
 

@@ -60,12 +60,13 @@ if errorlevel 1 exit /b 1
 echo Configuring %PACKAGE_SUFFIX% build...
 if /I "%CMAKE_GENERATOR_NAME%"=="Ninja" (
     cmake -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DXXWIDGETS_BUILD_TESTS=OFF
+    if errorlevel 1 exit /b 1
     set "APP_DIR=%BUILD_DIR%"
 ) else (
     cmake -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" -G "%CMAKE_GENERATOR_NAME%" -A "%CMAKE_PLATFORM%" -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DXXWIDGETS_BUILD_TESTS=OFF
+    if errorlevel 1 exit /b 1
     set "APP_DIR=%BUILD_DIR%\Release"
 )
-if errorlevel 1 exit /b 1
 
 echo Building %PACKAGE_SUFFIX% Release...
 if /I "%CMAKE_GENERATOR_NAME%"=="Ninja" (
