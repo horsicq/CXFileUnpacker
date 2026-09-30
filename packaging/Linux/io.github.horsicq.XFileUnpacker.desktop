@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=XFileUnpacker
+Comment=Browse, extract and test archives
+Exec=XFileUnpacker %f
+Icon=xfileunpacker
+Terminal=false
+Categories=Utility;Archiving;
+MimeType=application/zip;application/x-tar;application/gzip;application/x-bzip2;application/x-xz;application/x-7z-compressed;application/vnd.rar;
+StartupWMClass=XFileUnpacker

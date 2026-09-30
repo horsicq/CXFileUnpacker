@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<title>XFileUnpacker</title><desc>Open archive box with an extraction arrow</desc>
+<rect x="40" y="40" width="944" height="944" rx="208" fill="#183B56"/>
+<polygon points="230,440 512,550 794,440 794,754 512,866 230,754" fill="#EFAF38"/>
+<polygon points="512,550 794,440 794,754 512,866" fill="#CE8225"/>
+<polygon points="230,440 512,330 794,440 512,550" fill="#A35E1B"/>
+<polygon points="230,440 512,550 358,663 136,548" fill="#FFCC66"/>
+<polygon points="512,550 794,440 888,548 666,663" fill="#FFD98B"/>
+<polygon points="468,432 556,432 556,296 654,296 512,144 370,296 468,296" fill="#F5FAFF"/>
+<polygon points="322,746 434,790 434,826 322,782" fill="#FFDA86"/>
+</svg>

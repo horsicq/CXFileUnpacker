@@ -1,0 +1,2 @@
+// The lowest resource ID is also used by Windows Explorer for all frontends.
+101 ICON "@XFILEUNPACKER_ICON_DIR@/xfileunpacker.ico"
