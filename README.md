@@ -8,12 +8,12 @@ A C11 archive unpacker with three applications built from one CMake project:
 | `XFileUnpacker` | Native xxwidgets desktop interface |
 | `xfut` | xxwidgets terminal interface |
 
-Format handling comes from `../_mylibs/xxfclib/xxformats.cmake`, which builds
+Format handling comes from `cmake/xxformats.cmake`, which builds
 the formats and algorithms with their runtime support, without `die_engine`,
 the JavaScript interpreter or `cdisasm`. The reader table is compiled
 directly from its `samples/unpack/xxfc_readers.c`, so format updates do not
 require copying the table into this project. The GUI and TUI use
-`../_mylibs/xxwidgets`, including the reusable `XXWIDGETS_ARCHIVEBROWSER`
+`dep/xxwidgets`, including the reusable `XXWIDGETS_ARCHIVEBROWSER`
 desktop widget and compact `XXWIDGETS_ARCHIVEVIEW` terminal view. The applications are written in C; they do not
 use Qt or C++. On macOS, the native xxwidgets backend uses its existing
 private AppKit bridge in Objective-C.
@@ -44,6 +44,11 @@ The worker publishes snapshots under a mutex; the UI never reads its mutable
 monitor directly. Cancel/Escape/close requests stop inside the decoder, and the
 dialog waits for worker completion before restoring the main window. Completed
 files are kept on cancellation.
+
+Clone with `git clone --recurse-submodules`, or run
+`git submodule update --init --recursive` in an existing checkout. The
+`dep/xxfclib`, `dep/xxwidgets`, and `dep/cdisasm` revisions are pinned by
+this repository.
 
 ## Build on Windows
 
@@ -148,8 +153,7 @@ The build workflow packages Windows x64 and Ubuntu 24.04 on pushes and pull
 requests to `main`. It saves both ZIP files as workflow artifacts. Run the
 workflow manually from `main` to upload the packages to the existing `Beta`
 prerelease; that run also advances the `Beta` tag to the packaged commit.
-The hosted builds require compatible sources in the public `horsicq/xxfclib`
-and `horsicq/xxwidgets` repositories.
+The hosted builds initialize the pinned submodules.
 
 ## Command line
 
@@ -314,7 +318,7 @@ the current directory, sorts columns, and maps selections to original members.
 Its native backends provide report tables; its terminal backend supports the
 same navigation. ArchiveView remains available for compact flat lists. Neither
 widget depends on xxfclib, so other applications can reuse them. Their
-public API is in `../_mylibs/xxwidgets/include/xxwidgets/xxwidgets.h`.
+public API is in `dep/xxwidgets/include/xxwidgets/xxwidgets.h`.
 
 CTest checks creation, listing, extraction, and testing for ZIP, TAR, CPIO,
 and TAR.GZ archives; compares file contents; and covers paths with spaces and

@@ -1,0 +1,9 @@
+[submodule "dep/xxwidgets"]
+	path = dep/xxwidgets
+	url = https://github.com/horsicq/xxwidgets.git
+[submodule "dep/cdisasm"]
+	path = dep/cdisasm
+	url = https://github.com/horsicq/cdisasm.git
+[submodule "dep/xxfclib"]
+	path = dep/xxfclib
+	url = https://github.com/horsicq/xxfclib.git

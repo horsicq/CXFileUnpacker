@@ -7,8 +7,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-set(XFILEUNPACKER_XXFCLIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../_mylibs/xxfclib" CACHE PATH "xxfclib source directory")
-set(XFILEUNPACKER_XXWIDGETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../_mylibs/xxwidgets" CACHE PATH "xxwidgets source directory")
+set(XFILEUNPACKER_XXFCLIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dep/xxfclib" CACHE PATH "xxfclib source directory")
+set(XFILEUNPACKER_XXWIDGETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dep/xxwidgets" CACHE PATH "xxwidgets source directory")
 option(XFILEUNPACKER_BUILD_GUI "Build the native desktop frontend" ON)
 option(XFILEUNPACKER_BUILD_TUI "Build the terminal frontend" ON)
 
@@ -32,7 +32,7 @@ function(xfu_c_target target)
 endfunction()
 
 if(NOT TARGET xxfclib::xxformats)
-    include("${XFILEUNPACKER_XXFCLIB_DIR}/xxformats.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/xxformats.cmake")
     add_library(xxfclib_formats STATIC ${XXFORMATS_SOURCES})
     add_library(xxfclib::xxformats ALIAS xxfclib_formats)
     target_include_directories(xxfclib_formats
@@ -71,12 +71,24 @@ xfu_c_target(XFileUnpacker)
 
 if(XFILEUNPACKER_BUILD_GUI OR XFILEUNPACKER_BUILD_TUI)
     if(NOT TARGET xxwidgets::xxwidgets)
-        set(XXWIDGETS_BUILD_SETTINGS ON)
+        set(XXWIDGETS_BUILD_SETTINGS OFF)
         set(XXWIDGETS_XXFCLIB_DIR "${XFILEUNPACKER_XXFCLIB_DIR}")
         add_subdirectory("${XFILEUNPACKER_XXWIDGETS_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/deps/xxwidgets" EXCLUDE_FROM_ALL)
     endif()
     if(NOT TARGET xxwidgets::settings)
-        message(FATAL_ERROR "XFileUnpacker requires xxwidgets built with XXWIDGETS_BUILD_SETTINGS=ON")
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/xxsettings.cmake")
+        add_library(xfileunpacker_widget_settings STATIC
+            "${XFILEUNPACKER_XXWIDGETS_DIR}/src/xxwidgets_settings.c"
+            ${XXSETTINGS_SOURCES})
+        add_library(xxwidgets::settings ALIAS xfileunpacker_widget_settings)
+        set_target_properties(xfileunpacker_widget_settings PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        target_include_directories(xfileunpacker_widget_settings PUBLIC
+            "${XFILEUNPACKER_XXWIDGETS_DIR}/include"
+            "${XXSETTINGS_INCLUDE_DIR}")
+        target_compile_definitions(xfileunpacker_widget_settings PUBLIC XXFC_STATIC)
+        target_link_libraries(xfileunpacker_widget_settings PUBLIC
+            xxwidgets::xxwidgets ${XXSETTINGS_LIBRARIES})
+        xfu_c_target(xfileunpacker_widget_settings)
     endif()
     find_package(Threads REQUIRED)
     add_library(xfileunpacker_ui STATIC src/ui.c src/ui.h)

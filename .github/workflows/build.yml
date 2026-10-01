@@ -18,16 +18,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: CXFileUnpacker
-      - name: Check out xxfclib
-        uses: actions/checkout@v4
-        with:
-          repository: horsicq/xxfclib
-          path: _mylibs/xxfclib
-      - name: Check out xxwidgets
-        uses: actions/checkout@v4
-        with:
-          repository: horsicq/xxwidgets
-          path: _mylibs/xxwidgets
+          submodules: recursive
       - name: Install GTK
         run: |
           sudo apt-get update
@@ -60,16 +51,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: CXFileUnpacker
-      - name: Check out xxfclib
-        uses: actions/checkout@v4
-        with:
-          repository: horsicq/xxfclib
-          path: _mylibs/xxfclib
-      - name: Check out xxwidgets
-        uses: actions/checkout@v4
-        with:
-          repository: horsicq/xxwidgets
-          path: _mylibs/xxwidgets
+          submodules: recursive
       - name: Build and package Windows
         shell: cmd
         working-directory: CXFileUnpacker
