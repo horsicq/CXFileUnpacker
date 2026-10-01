@@ -1,0 +1,125 @@
+name: Build and publish Beta
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out XFileUnpacker
+        uses: actions/checkout@v4
+        with:
+          path: CXFileUnpacker
+      - name: Check out xxfclib
+        uses: actions/checkout@v4
+        with:
+          repository: horsicq/xxfclib
+          path: _mylibs/xxfclib
+      - name: Check out xxwidgets
+        uses: actions/checkout@v4
+        with:
+          repository: horsicq/xxwidgets
+          path: _mylibs/xxwidgets
+      - name: Install GTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev pkg-config xvfb
+      - name: Configure
+        working-directory: CXFileUnpacker
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DXXWIDGETS_BUILD_TESTS=ON
+      - name: Build
+        working-directory: CXFileUnpacker
+        run: cmake --build build --parallel 2
+      - name: Test
+        working-directory: CXFileUnpacker
+        run: xvfb-run -a ctest --test-dir build --output-on-failure
+      - name: Package Ubuntu
+        working-directory: CXFileUnpacker
+        run: |
+          version=$(head -n 1 release_version.txt)
+          cpack --config build/CPackConfig.cmake -G ZIP -B release -D "CPACK_PACKAGE_FILE_NAME=xfileunpacker_ubuntu24_amd64_${version}"
+      - name: Save Ubuntu package
+        uses: actions/upload-artifact@v4
+        with:
+          name: xfileunpacker-ubuntu24
+          path: CXFileUnpacker/release/xfileunpacker_ubuntu24_amd64_*.zip
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - name: Check out XFileUnpacker
+        uses: actions/checkout@v4
+        with:
+          path: CXFileUnpacker
+      - name: Check out xxfclib
+        uses: actions/checkout@v4
+        with:
+          repository: horsicq/xxfclib
+          path: _mylibs/xxfclib
+      - name: Check out xxwidgets
+        uses: actions/checkout@v4
+        with:
+          repository: horsicq/xxwidgets
+          path: _mylibs/xxwidgets
+      - name: Build and package Windows
+        shell: cmd
+        working-directory: CXFileUnpacker
+        run: call packaging\Windows\build_portable_windows.cmd x64 win64
+      - name: Save Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: xfileunpacker-win64
+          path: CXFileUnpacker/release/xfileunpacker_win64_portable_*.zip
+          if-no-files-found: error
+
+  publish-beta:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: [ubuntu, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: xfileunpacker-beta-publish
+      cancel-in-progress: false
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: xfileunpacker-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify packages and current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 2
+          latest=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
+          test "$latest" = "$GITHUB_SHA"
+      - name: Point Beta tag at packaged commit
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const main = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
+            if (main.data.object.sha !== context.sha) {
+              throw new Error('main moved before the Beta release was uploaded');
+            }
+            await github.rest.git.updateRef({ owner, repo, ref: 'tags/Beta', sha: context.sha, force: true });
+      - name: Upload to Beta release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: Beta
+          name: Beta
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: release-assets/*.zip

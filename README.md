@@ -142,6 +142,15 @@ cmake --build build-cli --parallel
 Override the library paths with the CMake options `XFILEUNPACKER_XXFCLIB_DIR`
 and `XFILEUNPACKER_XXWIDGETS_DIR`.
 
+## GitHub Actions and Beta
+
+The build workflow packages Windows x64 and Ubuntu 24.04 on pushes and pull
+requests to `main`. It saves both ZIP files as workflow artifacts. Run the
+workflow manually from `main` to upload the packages to the existing `Beta`
+prerelease; that run also advances the `Beta` tag to the packaged commit.
+The hosted builds require compatible sources in the public `horsicq/xxfclib`
+and `horsicq/xxwidgets` repositories.
+
 ## Command line
 
 The commands, `-o<dir>` option, listing format, and diagnostic messages come
