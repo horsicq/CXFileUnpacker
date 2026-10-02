@@ -35,6 +35,31 @@ available unchanged. Thus a valid `.gz` stream opens as gzip first, while a
 renamed file can still be recognized by content. If content remains Binary,
 the existing validated extension fallback also tries signatureless formats.
 
+Compatibility includes single-member LZIP version 0 streams, older PYZ tables
+with little-endian offsets or dictionary entries, LOFI `gzip`/`gzip-6`/`gzip-9`
+segments, Palm database names with unused bytes after the NUL, and BinHex
+payloads placed directly after their banner. BVRP supports stored entries and
+compressed entries with name trailers. Gzip payloads in packed executable
+carriers retain full DEFLATE, CRC and size validation. A damaged DMS image can
+expose later independently verified tracks while its complete-image extraction
+continues to report failure.
+
+For a repeatable corpus audit, `tools/verify_arc_corpus.py` selects the smallest
+direct file in every nonempty subfolder, recursively. It keeps extraction logs,
+output SHA-256 hashes and CSV/JSON results in a new report directory. Empty
+container folders are recorded separately. Samples are only read as data.
+
+```powershell
+python tools/verify_arc_corpus.py --root F:\ARC\ARC1_err `
+  --unpacker build/Release/xfu.exe --report-dir build/arc-audit `
+  --timeout 120 --jobs 4
+```
+
+Use `--replay <earlier-report.json>` to repeat the exact sample selection.
+Timeouts, failed extractions and successful empty archives have separate statuses.
+The offline `xfileunpacker_probe_readers` build target can validate named readers
+against a sample when investigating a detection or parser failure.
+
 `xfu --formats` (or `xfu i`) lists every file type in xxfclib's format catalog.
 A compact grouped catalog is in [docs/CURRENT.md](docs/CURRENT.md).
 Terminal output uses colors automatically; `--color=always` or `--color=never`

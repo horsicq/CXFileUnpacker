@@ -77,6 +77,12 @@ if(WIN32)
 endif()
 xfu_c_target(XFileUnpacker)
 
+# Offline tool for investigating detection and reader coverage on real corpora.
+add_executable(xfileunpacker_probe_readers EXCLUDE_FROM_ALL tools/probe_readers.c)
+target_include_directories(xfileunpacker_probe_readers PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
+target_link_libraries(xfileunpacker_probe_readers PRIVATE xfileunpacker_core)
+xfu_c_target(xfileunpacker_probe_readers)
+
 if(XFILEUNPACKER_BUILD_GUI OR XFILEUNPACKER_BUILD_TUI)
     if(NOT TARGET xxwidgets::xxwidgets)
         set(XXWIDGETS_BUILD_SETTINGS OFF)
@@ -142,6 +148,21 @@ include(packaging/icons.cmake)
 
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)
+    add_executable(xfileunpacker_sfx_gzip_tests tests/sfx_gzip.c)
+    target_link_libraries(xfileunpacker_sfx_gzip_tests PRIVATE xfileunpacker_core)
+    xfu_c_target(xfileunpacker_sfx_gzip_tests)
+    add_test(NAME sfx_gzip_carriers COMMAND xfileunpacker_sfx_gzip_tests)
+    set_tests_properties(sfx_gzip_carriers PROPERTIES TIMEOUT 20)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME binhex_layout COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/binhex_layout.py" "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME legacy_archives COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/legacy_archives.py" "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME reader_compatibility COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/reader_compatibility.py" "$<TARGET_FILE:XFileUnpacker>")
+        set_tests_properties(binhex_layout legacy_archives reader_compatibility PROPERTIES TIMEOUT 60)
+    endif()
     add_executable(xfileunpacker_progress_tests tests/progress_observer.c)
     target_link_libraries(xfileunpacker_progress_tests PRIVATE xfileunpacker_core Threads::Threads)
     xfu_c_target(xfileunpacker_progress_tests)
