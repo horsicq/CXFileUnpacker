@@ -40,6 +40,13 @@ static void write_file(const char *path, const char *text)
     CHECK(fclose(file) == 0);
 }
 
+static void write_bytes(const char *path, const unsigned char *bytes, size_t length)
+{
+    FILE *file = fopen(path, "wb");
+    CHECK(file && fwrite(bytes, 1, length, file) == length);
+    CHECK(fclose(file) == 0);
+}
+
 int main(void)
 {
     const char *files[] = {"alpha.txt", "beta.txt"};
@@ -87,6 +94,49 @@ int main(void)
     request.archive_path = "renamed.data"; request.file_type = XX_FILE_TYPE_UNKNOWN;
     memset(&seen, 0, sizeof(seen)); CHECK(xfu_run(&request) == 2);
     CHECK(seen.type_count == 1 && seen.types[0] == XX_FILE_TYPE_BINARY && !seen.entries);
+    {
+        static const unsigned char anadisk[] = {
+            0, 0, 0, 0, 1, 2, 1, 0, 'A',
+            0, 0, 0, 0, 2, 2, 1, 0, 'B'
+        };
+        write_bytes("two-sectors.ANA", anadisk, sizeof(anadisk));
+        device = xx_io_file_open("two-sectors.ANA", "rb");
+        CHECK(device && xx_format_get_file_type_device(device) == XX_FILE_TYPE_BINARY);
+        xx_io_close(device);
+        request.archive_path = "two-sectors.ANA";
+        memset(&seen, 0, sizeof(seen));
+        CHECK(xfu_run(&request) == 0);
+        CHECK(seen.selected == XX_FILE_TYPE_PCE_ANADISK && seen.entries == 2);
+        CHECK(seen.type_count >= 1 && seen.types[seen.type_count - 1] == XX_FILE_TYPE_PCE_ANADISK);
+        request.file_type = XX_FILE_TYPE_ZIP;
+        memset(&seen, 0, sizeof(seen)); CHECK(xfu_run(&request) == 2);
+        request.file_type = XX_FILE_TYPE_UNKNOWN;
+        write_file("fake.ANA", "ordinary bytes");
+        request.archive_path = "fake.ANA";
+        memset(&seen, 0, sizeof(seen)); CHECK(xfu_run(&request) == 2);
+        CHECK(seen.selected == XX_FILE_TYPE_BINARY && !seen.entries);
+        CHECK(remove("two-sectors.ANA") == 0 && remove("fake.ANA") == 0);
+    }
+    CHECK(rename("sample.tar.gz", "signature.ANA") == 0);
+    request.archive_path = "signature.ANA";
+    memset(&seen, 0, sizeof(seen)); CHECK(xfu_run(&request) == 0);
+    CHECK(seen.selected == XX_FILE_TYPE_TAR_GZ && seen.entries == 2);
+    CHECK(rename("signature.ANA", "sample.tar.gz") == 0);
+    /* The fast path uses a valid .gz interpretation before sniffing TAR. */
+    CHECK(rename("sample.tar.gz", "extension-first.GZ") == 0);
+    device = xx_io_file_open("extension-first.GZ", "rb");
+    CHECK(device && xx_format_get_file_type_device(device) == XX_FILE_TYPE_TAR_GZ);
+    CHECK(xx_format_get_file_type_device_fast(device, NULL) == XX_FILE_TYPE_GZ);
+    xx_io_close(device);
+    request.archive_path = "extension-first.GZ";
+    memset(&seen, 0, sizeof(seen)); CHECK(xfu_run(&request) == 0);
+    CHECK(seen.selected == XX_FILE_TYPE_GZ && seen.entries == 1);
+    CHECK(rename("extension-first.GZ", "sample.tar.gz") == 0);
+    write_file("fake.ZIP", "ordinary bytes");
+    request.archive_path = "fake.ZIP";
+    memset(&seen, 0, sizeof(seen)); CHECK(xfu_run(&request) == 2);
+    CHECK(seen.selected == XX_FILE_TYPE_BINARY && !seen.entries);
+    CHECK(remove("fake.ZIP") == 0);
     CHECK(remove(payload) == 0 && remove("sample.tar.gz") == 0 && remove("renamed.data") == 0);
     CHECK(remove(files[0]) == 0 && remove(files[1]) == 0);
     puts("Detected types, exact gzip/TAR readers and Binary archive refusal passed");

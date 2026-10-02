@@ -61,6 +61,14 @@ target_compile_definitions(xfileunpacker_core PRIVATE XXFC_FORMATS_ONLY)
 target_link_libraries(xfileunpacker_core PUBLIC xxfclib::xxformats)
 xfu_c_target(xfileunpacker_core)
 
+# Offline helper for refreshing xxfclib's static extension detector table.
+add_executable(xfileunpacker_dump_extensions EXCLUDE_FROM_ALL
+    "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack/dump_extensions.c")
+target_include_directories(xfileunpacker_dump_extensions PRIVATE
+    "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
+target_link_libraries(xfileunpacker_dump_extensions PRIVATE xfileunpacker_core)
+xfu_c_target(xfileunpacker_dump_extensions)
+
 add_executable(XFileUnpacker src/cli.c)
 set_target_properties(XFileUnpacker PROPERTIES OUTPUT_NAME xfu)
 target_link_libraries(XFileUnpacker PRIVATE xfileunpacker_core)
@@ -167,7 +175,16 @@ if(BUILD_TESTING)
     add_test(NAME file_types COMMAND xfileunpacker_file_type_tests)
     set_tests_properties(file_types PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/file-types" TIMEOUT 30)
-    foreach(widget_test IN ITEMS xxwidgets_core_tests xxwidgets_win32_tests xxwidgets_tui_tests)
+    add_executable(xfileunpacker_fast_detection_tests tests/fast_detection.c)
+    target_link_libraries(xfileunpacker_fast_detection_tests PRIVATE xfileunpacker_core)
+    xfu_c_target(xfileunpacker_fast_detection_tests)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/fast-detection")
+    add_test(NAME fast_detection COMMAND xfileunpacker_fast_detection_tests)
+    set_tests_properties(fast_detection PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/fast-detection" TIMEOUT 30)
+    foreach(widget_test IN ITEMS xxwidgets_core_tests xxwidgets_win32_tests
+                                 xxwidgets_scan_options_tests xxwidgets_font_options_tests
+                                 xxwidgets_context_options_tests xxwidgets_tui_tests)
         if(TARGET ${widget_test})
             list(APPEND _xfu_widget_tests ${widget_test})
         endif()

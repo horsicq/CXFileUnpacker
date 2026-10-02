@@ -1,4 +1,4 @@
-# CXFileUnpacker
+# XFileUnpacker
 
 A C11 archive unpacker with three applications built from one CMake project:
 
@@ -8,9 +8,9 @@ A C11 archive unpacker with three applications built from one CMake project:
 | `XFileUnpacker` | Native xxwidgets desktop interface |
 | `xfut` | xxwidgets terminal interface |
 
-Format handling comes from `cmake/xxformats.cmake`, which builds
-the formats and algorithms with their runtime support, without `die_engine`,
-the JavaScript interpreter or `cdisasm`. The reader table is compiled
+Format handling comes from `cmake/xxformats.cmake` in this project,
+which builds the formats and algorithms with their runtime support, without
+`die_engine`, the JavaScript interpreter or `cdisasm`. The reader table is compiled
 directly from its `samples/unpack/xxfc_readers.c`, so format updates do not
 require copying the table into this project. The GUI and TUI use
 `dep/xxwidgets`, including the reusable `XXWIDGETS_ARCHIVEBROWSER`
@@ -25,8 +25,18 @@ TAR payload as one member; selecting `tar.gz` shows its files and folders.
 Listing, extraction, and testing use the selected interpretation. `Binary`
 clears the archive listing and disables extraction and testing. Opening a
 different file detects its types and selects the most specific one again.
+Detection starts with xxfclib's separate extension-first fast detector,
+`xx_format_get_file_type_device_fast()`. Its static suffix lookup performs no
+file reads or reader construction and handles case and compound suffixes such
+as `.tar.gz`. XFileUnpacker validates and parses the suggested reader before
+accepting it. Unknown or ambiguous suffixes, and rejected extension hints, use
+the existing content detector, `xx_format_get_file_type_device()`, which remains
+available unchanged. Thus a valid `.gz` stream opens as gzip first, while a
+renamed file can still be recognized by content. If content remains Binary,
+the existing validated extension fallback also tries signatureless formats.
 
 `xfu --formats` (or `xfu i`) lists every file type in xxfclib's format catalog.
+A compact grouped catalog is in [docs/CURRENT.md](docs/CURRENT.md).
 Terminal output uses colors automatically; `--color=always` or `--color=never`
 overrides this, and `NO_COLOR` disables automatic colors. Redirected output is
 plain text by default. The GUI's **Help → Supported file types...** menu opens
@@ -45,10 +55,20 @@ monitor directly. Cancel/Escape/close requests stop inside the decoder, and the
 dialog waits for worker completion before restoring the main window. Completed
 files are kept on cancellation.
 
-Clone with `git clone --recurse-submodules`, or run
-`git submodule update --init --recursive` in an existing checkout. The
-`dep/xxfclib`, `dep/xxwidgets`, and `dep/cdisasm` revisions are pinned by
-this repository.
+## Source dependencies
+
+After cloning the repository, initialize its submodules from the project root:
+
+```sh
+git submodule update --init --recursive
+```
+
+This populates `dep/xxfclib`, `dep/xxwidgets`, and `dep/cdisasm`. The current
+build uses `xxwidgets` but does not use `cdisasm`. The format and settings
+source lists live in this project's `cmake/` directory, while CMake uses the
+initialized `dep/xxfclib` and `dep/xxwidgets` by default. Set
+`XFILEUNPACKER_XXFCLIB_DIR` or `XFILEUNPACKER_XXWIDGETS_DIR` to another
+compatible source directory if needed.
 
 ## Build on Windows
 
@@ -150,10 +170,10 @@ and `XFILEUNPACKER_XXWIDGETS_DIR`.
 ## GitHub Actions and Beta
 
 The build workflow packages Windows x64 and Ubuntu 24.04 on pushes and pull
-requests to `main`. It saves both ZIP files as workflow artifacts. Run the
-workflow manually from `main` to upload the packages to the existing `Beta`
+requests to `master`. It saves both ZIP files as workflow artifacts. Run the
+workflow manually from `master` to upload the packages to the existing `Beta`
 prerelease; that run also advances the `Beta` tag to the packaged commit.
-The hosted builds initialize the pinned submodules.
+The hosted builds initialize the pinned dependency submodules recursively.
 
 ## Command line
 
@@ -163,7 +183,7 @@ has been changed.
 
 ```text
 xfu x <archive> [-o<dir>]     Extract with full paths
-xfu l <archive>               List contents
+xfu l <archive> [--advanced]  List contents, optionally with all metadata
 xfu t <archive>               Test by extracting into a temporary directory
 xfu a <archive> <file>...     Add files to a new archive
 ```
@@ -179,6 +199,9 @@ argument:
 
 Listings retain the sample format: `archive: FORMAT`, followed by each
 member's packed size and name, and finally `N member(s)`. Errors go to stderr.
+Pass `--advanced` (or 7-Zip-style `-slt`) after the archive path to print each
+member's type, sizes, modified time, attributes, and every available reader
+property beneath its normal listing row. Missing values are shown as `unknown`.
 With no arguments, `--help`, or `-h`, the application prints help.
 
 The `t` command actually decodes data into a unique temporary directory and

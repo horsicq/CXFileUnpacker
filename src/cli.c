@@ -27,13 +27,14 @@ static void usage(FILE *out, const char *program) {
             "\n"
             "Commands (7-Zip letters):\n"
             "  x <archive> [-o<dir>]     Extract with full paths\n"
-            "  l <archive>               List contents\n"
+            "  l <archive> [--advanced]  List contents and optional metadata\n"
             "  t <archive>               Test: extract to a scratch dir, then discard\n"
             "  a <archive> <file>...     Add files to a new archive\n"
             "  i                         Show all supported file types\n"
             "\n"
             "Options:\n"
             "  -o<dir>   Output directory for x (default: the current directory)\n"
+            "  --advanced, -slt  Show all available metadata for each listed file\n"
             "  --formats List all supported file types (same as i; no archive needed)\n"
             "  --color=auto|always|never  Colors for the file type list (default: auto)\n"
             "\n"
@@ -46,6 +47,20 @@ static void usage(FILE *out, const char *program) {
 static void console_log(void *user, bool error, const char *line) {
     (void)user;
     fprintf(error ? stderr : stdout, "%s\n", line);
+}
+
+static void console_advanced_entry(void *user, const xfu_entry *entry) {
+    size_t i;
+    (void)user;
+    fprintf(stdout, "    Type: %s\n", entry->is_directory ? "Directory" : "File");
+    if (entry->packed_size >= 0) fprintf(stdout, "    Packed size: %lld\n", (long long)entry->packed_size);
+    else fputs("    Packed size: unknown\n", stdout);
+    if (entry->unpacked_size >= 0) fprintf(stdout, "    Unpacked size: %lld\n", (long long)entry->unpacked_size);
+    else fputs("    Unpacked size: unknown\n", stdout);
+    fprintf(stdout, "    Modified: %s\n", entry->modified[0] ? entry->modified : "unknown");
+    fprintf(stdout, "    Attributes: %s\n", entry->attributes[0] ? entry->attributes : "unknown");
+    for (i = 0; i < entry->property_count; ++i)
+        fprintf(stdout, "    %s: %s\n", entry->properties[i].name, entry->properties[i].value);
 }
 
 static int show_supported_types(int argc, char **argv)
@@ -149,6 +164,13 @@ static int run_cli(int argc, char **argv) {
                 return 2;
             }
             files[request.file_count++] = argv[i];
+        } else if (request.command == XFU_COMMAND_LIST &&
+                   (!strcmp(argv[i], "--advanced") || !strcmp(argv[i], "-slt"))) {
+            if (request.callbacks.entry) {
+                fprintf(stderr, "advanced listing specified more than once\n");
+                return 2;
+            }
+            request.callbacks.entry = console_advanced_entry;
         } else if (request.command == XFU_COMMAND_EXTRACT &&
                    strncmp(argv[i], "-o", 2) == 0) {
             if (!argv[i][2]) {

@@ -126,7 +126,7 @@ static int walk(const xfu_request *request, const char *unpack_to,
                 xx_pd_struct *pd) {
     const char *archive_path = request->archive_path;
     xx_io_device *device;
-    xxfc_opened opened;
+    xxfc_opened opened = {0};
     xx_archive_record_state *state;
     xx_list_t options;
     uint64_t total = 0, failed = 0, known_total = 0;
@@ -136,6 +136,7 @@ static int walk(const xfu_request *request, const char *unpack_to,
     xx_file_type_t types[XX_FILE_TYPE_CHAIN_MAX], detected, selected;
     size_t type_count, type_index;
     bool type_matches = false;
+    bool extension_opened = false;
 
     if (cancelled(request, pd)) {
         emit(request, true, "operation cancelled");
@@ -146,26 +147,47 @@ static int walk(const xfu_request *request, const char *unpack_to,
         emit(request, true, "cannot open %s", archive_path);
         return 2;
     }
-    detected = xx_format_get_file_type_device(device);
+    detected = xx_format_get_file_type_device_fast(device, archive_path);
+    if (xx_format_get_file_type_extension(archive_path) != XX_FILE_TYPE_UNKNOWN) {
+        extension_opened = xxfc_open_extension_fast(&opened, device, 0,
+                                                    archive_path, pd);
+        if (extension_opened) detected = opened.type;
+        else if (!xx_pd_is_stopped(pd))
+            detected = xx_format_get_file_type_device(device);
+    }
+    if (!extension_opened && !xx_pd_is_stopped(pd) &&
+        (detected == XX_FILE_TYPE_BINARY || detected == XX_FILE_TYPE_UNKNOWN)) {
+        extension_opened = xxfc_open_extension(&opened, device, 0,
+                                               archive_path, pd);
+        if (extension_opened) detected = opened.type;
+    }
     type_count = xx_format_get_file_type_chain(detected, types, XX_FILE_TYPE_CHAIN_MAX);
     selected = request->file_type == XX_FILE_TYPE_UNKNOWN ? detected : request->file_type;
     if (request->callbacks.file_types)
         request->callbacks.file_types(request->callbacks.user, types, type_count, selected);
     if (cancelled(request, pd)) {
-        emit(request, true, "operation cancelled"); xx_io_close(device); return 1;
+        emit(request, true, "operation cancelled");
+        if (extension_opened) xxfc_close(&opened);
+        xx_io_close(device); return 1;
     }
     for (type_index = 0; type_index < type_count; ++type_index)
         if (types[type_index] == selected) type_matches = true;
     if (request->file_type != XX_FILE_TYPE_UNKNOWN && !type_matches) {
         emit(request, true, "%s: selected type %s does not match this file", archive_path,
              xx_format_file_type_to_string(selected));
+        if (extension_opened) xxfc_close(&opened);
         xx_io_close(device); return 2;
     }
     if (selected == XX_FILE_TYPE_BINARY) {
         emit(request, true, "%s: Binary cannot be opened as an archive", archive_path);
+        if (extension_opened) xxfc_close(&opened);
         xx_io_close(device); return 2;
     }
-    if (!xxfc_open_type(&opened, device, 0, selected)) {
+    if (extension_opened && opened.type != selected) {
+        xxfc_close(&opened);
+        extension_opened = false;
+    }
+    if (!extension_opened && !xxfc_open_type(&opened, device, 0, selected)) {
         if (opened.type == XX_FILE_TYPE_UNKNOWN)
             emit(request, true, "%s: not a recognised format", archive_path);
         else
@@ -174,13 +196,13 @@ static int walk(const xfu_request *request, const char *unpack_to,
         xx_io_close(device);
         return 2;
     }
-    if (!xx_format_is_valid(opened.format, pd)) {
+    if (!extension_opened && !xx_format_is_valid(opened.format, pd)) {
         emit(request, true, "%s: %s header does not hold up", archive_path,
              opened.reader_name);
         status = xx_pd_is_stopped(pd) ? 1 : 2;
         goto done;
     }
-    if (!xx_format_handle_base_info(opened.format, pd)) {
+    if (!extension_opened && !xx_format_handle_base_info(opened.format, pd)) {
         emit(request, true, "%s: %s could not be parsed", archive_path,
              opened.reader_name);
         status = xx_pd_is_stopped(pd) ? 1 : 2;
@@ -248,6 +270,9 @@ static int walk(const xfu_request *request, const char *unpack_to,
         entry.is_directory = xx_archive_record_get_meta_bool(
             record, XX_META_ID_IS_FOLDER, false);
         member_metadata(record, &entry);
+        if (!unpack_to)
+            emit(request, false, "  %12lld  %s",
+                 (long long)entry.packed_size, entry.name);
         if (request->callbacks.entry) {
             if (!xfu_record_properties(record, opened.type == XX_FILE_TYPE_ZIP || opened.type == XX_FILE_TYPE_ZIP64,
                                        &properties, &entry.property_count)) {
@@ -273,9 +298,6 @@ static int walk(const xfu_request *request, const char *unpack_to,
                 ++failed;
                 emit(request, true, "  %s -- FAILED", entry.name);
             }
-        } else {
-            emit(request, false, "  %12lld  %s",
-                 (long long)entry.packed_size, entry.name);
         }
         progress(request, total, known_total, entry.name);
         xx_str_free(owned);
