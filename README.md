@@ -1,4 +1,4 @@
-# XFileUnpacker
+# CXFileUnpacker
 
 A C11 archive unpacker with three applications built from one CMake project:
 
