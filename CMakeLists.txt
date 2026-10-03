@@ -78,10 +78,10 @@ endif()
 xfu_c_target(XFileUnpacker)
 
 # Offline tool for investigating detection and reader coverage on real corpora.
-add_executable(xfileunpacker_probe_readers EXCLUDE_FROM_ALL tools/probe_readers.c)
-target_include_directories(xfileunpacker_probe_readers PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
-target_link_libraries(xfileunpacker_probe_readers PRIVATE xfileunpacker_core)
-xfu_c_target(xfileunpacker_probe_readers)
+# add_executable(xfileunpacker_probe_readers EXCLUDE_FROM_ALL tools/probe_readers.c)
+# target_include_directories(xfileunpacker_probe_readers PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
+# target_link_libraries(xfileunpacker_probe_readers PRIVATE xfileunpacker_core)
+# xfu_c_target(xfileunpacker_probe_readers)
 
 if(XFILEUNPACKER_BUILD_GUI OR XFILEUNPACKER_BUILD_TUI)
     if(NOT TARGET xxwidgets::xxwidgets)
