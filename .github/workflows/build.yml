@@ -28,7 +28,7 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DXXWIDGETS_BUILD_TESTS=ON
       - name: Build
         working-directory: CXFileUnpacker
-        run: cmake --build build --parallel 2
+        run: cmake --build build -j $(nproc)
       - name: Test
         working-directory: CXFileUnpacker
         run: xvfb-run -a ctest --test-dir build --output-on-failure
