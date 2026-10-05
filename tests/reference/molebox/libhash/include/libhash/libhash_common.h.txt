@@ -1,0 +1,2 @@
+#include <stddef.h>
+#define LIBHASH_EXPORTABLE

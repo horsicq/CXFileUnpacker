@@ -1,0 +1,24 @@
+{
+  "upstream": "vpetrigo/bitrock-unpacker",
+  "commit": "fc680e2709d3bb6dccc04e3c5f196b379db27c47",
+  "license": "MIT",
+  "copyright": "2026-present Vladimir Petrigo",
+  "purpose": "Unmodified independent parser used only by BitRock regression tests; no runtime dependency. Empty package initializer added to avoid importing the CLI.",
+  "files": [
+    {
+      "path": "bitrock_unpacker/cookfs.py",
+      "sha256": "da14587ce2e15474cc547505fc522d09236a874c1fe3ecb896a3ba1dc4355df5",
+      "upstream_url": "https://raw.githubusercontent.com/vpetrigo/bitrock-unpacker/fc680e2709d3bb6dccc04e3c5f196b379db27c47/bitrock_unpacker/cookfs.py"
+    },
+    {
+      "path": "bitrock_unpacker/tcllist.py",
+      "sha256": "58e2a1e3632aa50dfd7d6cff0f8b0252ba740f1ddb98cb324376d362923948d6",
+      "upstream_url": "https://raw.githubusercontent.com/vpetrigo/bitrock-unpacker/fc680e2709d3bb6dccc04e3c5f196b379db27c47/bitrock_unpacker/tcllist.py"
+    },
+    {
+      "path": "LICENSE.md",
+      "sha256": "2d6d49dd7df892fb58674394a18f9ab293b51112ab79bbfe08231656e614965d",
+      "upstream_url": "https://raw.githubusercontent.com/vpetrigo/bitrock-unpacker/fc680e2709d3bb6dccc04e3c5f196b379db27c47/LICENSE.md"
+    }
+  ]
+}

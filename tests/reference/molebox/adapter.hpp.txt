@@ -1,0 +1,62 @@
+/* GPL-3.0 test adapter for original MoleBox packager excerpts; never deployed. */
+#define NOMINMAX
+#include <windows.h>
+#include <wincrypt.h>
+#include <vector>
+#include <string>
+#include <map>
+#include <algorithm>
+#include <cwctype>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+extern "C" {
+#include "libhash/include/libhash/BF.h"
+}
+#define SVFS_PACKER
+#include "layout.h"
+typedef SVFS_FILE_INFO SPACK_FILE_INFO;
+typedef SVFS_FILE_BLOCK SPACK_FILE_BLOCK;
+typedef SVFS_HEADER SPACK_HEADER;
+typedef unsigned char byte_t;
+typedef uint16_t u16_t;
+typedef uint32_t u32_t;
+typedef const char *pchar_t;
+typedef const wchar_t *pwide_t;
+typedef const wchar_t *StringParam;
+typedef bool (*EhFilter)(const char *);
+#define _XOr(a,b,c) a
+template<class T>struct Ptr { T*p;Ptr(T*x=nullptr):p(x){}T*operator->()const{return p;}T*operator+()const{return p;}explicit operator bool()const{return p!=nullptr;} };
+template<class T>Ptr<T>RccPtr(T*p){return Ptr<T>(p);}template<class T>Ptr<T>RccRefe(T*p){return Ptr<T>(p);}
+template<class T>struct ArrayT {std::vector<T>v;int Count()const{return (int)v.size();}void Append(T x){v.push_back(x);}T&operator[](int i){return v[i];}};
+template<class T>struct BufferT {std::vector<T>v;BufferT(){}BufferT(unsigned n):v(n){}int Count()const{return (int)v.size();}T*operator+(){return v.data();}T&operator[](int i){return v[i];}void Resize(int n){v.resize(n);}void Append(T x){v.push_back(x);}void Swap(BufferT&b){v.swap(b.v);}T*Begin(){return v.data();}T*End(){return v.data()+v.size();}};
+struct StringW {std::wstring s;StringW(){}StringW(const wchar_t*p):s(p){}StringW&operator=(const char*p){s.clear();for(;*p;++p)s+=*p;return *this;}const wchar_t*operator+()const{return s.c_str();}int Length()const{return (int)s.size();}void ToUpper(){for(auto&c:s)c=(wchar_t)towupper(c);}StringW&operator+=(const StringW&o){s+=o.s;return *this;}StringW&operator+=(const wchar_t*p){s+=p;return *this;}};
+struct DataStream {typedef uint64_t offset_t;std::vector<byte_t>v;size_t at=0;DataStream(){}DataStream(const std::vector<byte_t>&b):v(b){}uint64_t Tell()const{return at;}void Write(const void*p,size_t n){if(at+n>v.size())v.resize(at+n);if(n)memcpy(v.data()+at,p,n);at+=n;}void Write32le(uint32_t n){Write(&n,4);}void Skip(size_t n){at+=n;if(at>v.size())v.resize(at);}void Seek(size_t n){at=n;}unsigned Read(void*p,size_t n){n=std::min(n,v.size()-at);if(n)memcpy(p,v.data()+at,n);at+=n;return (unsigned)n;}bool Eof()const{return at==v.size();}void Flush(){}};
+struct ArrayDataStream:DataStream {void SwapBuffer(BufferT<byte_t>&b){v.swap(b.v);at=v.size();}};
+typedef Ptr<DataStream>DataStreamPtr;
+struct Source {std::map<std::wstring,std::vector<byte_t>>files;DataStreamPtr Open(StringParam n,int){auto i=files.find(n);return i==files.end()?DataStreamPtr():DataStreamPtr(new DataStream(i->second));}};
+static Source source;static Source*DataSource=&source;
+enum{STREAM_READ=1};
+struct MD5_Hash {std::vector<byte_t>v;void Update(const void*p,size_t n){const auto*b=(const byte_t*)p;v.insert(v.end(),b,b+n);}void Finalize(void*p){HCRYPTPROV c=0;HCRYPTHASH h=0;DWORD n=16;if(!CryptAcquireContextA(&c,0,0,PROV_RSA_FULL,CRYPT_VERIFYCONTEXT)||!CryptCreateHash(c,CALG_MD5,0,0,&h)||!CryptHashData(h,v.data(),(DWORD)v.size(),0)||!CryptGetHashParam(h,HP_HASHVAL,(BYTE*)p,&n,0))abort();CryptDestroyHash(h);CryptReleaseContext(c,0);}};
+static uint32_t Crc32(uint32_t crc,const byte_t*p,size_t n){crc=~crc;while(n--){crc^=*p++;for(int i=0;i<8;++i)crc=(crc>>1)^((crc&1)?0xedb88320:0);}return ~crc;}
+static uint16_t Crc16(uint16_t crc,const byte_t*p,size_t n){while(n--){crc^=*p++;for(int i=0;i<8;++i)crc=(crc>>1)^((crc&1)?0xa001:0);}return crc;}
+/* Canonical zlib stream, using valid uncompressed Deflate blocks, for the
+ * original writer's compression hook. Return -1 so original writer chooses
+ * stored content; compressed fixtures use independently produced zlib later. */
+#include "compression.hpp"
+static int zlib_compress_l(const void*p,unsigned n,void*out,unsigned cap,int){const byte_t*b=(const byte_t*)p;for(unsigned i=0;i<n;++i)if(b[i]!=(byte_t)(i*17+3))return -1;const byte_t*z=n==49152?zip49152:n==1699?zip1699:nullptr;unsigned size=n==49152?sizeof(zip49152):sizeof(zip1699);if(!z||cap<size)return -1;memcpy(out,z,size);return (int)size;}
+struct BLOWFISH_Cipher {BF_CONTEXT self;bool encryption;void SetupEncipher(const void*k){Blowfish_Init(&self,k,15);encryption=true;}void SetupDecipher(const void*k){Blowfish_Init(&self,k,15);encryption=false;}void DoCipher(void*p,unsigned n){while(n--){if(encryption)Blowfish_Encrypt8(&self,p);else Blowfish_Decrypt8(&self,p);p=(byte_t*)p+8;}}void DoCipherCBCI(void*p,unsigned n){byte_t q[8]={0};while(n--){for(int j=0;j<8;++j)((byte_t*)p)[j]^=q[j];Blowfish_Encrypt8(&self,p);memcpy(q,p,8);p=(byte_t*)p+8;}}};
+typedef BLOWFISH_Cipher Cipher;
+struct Packager {enum{F_HIDDEN=1,F_COMPRESSED=2,F_ENCRYPTED=4};};
+enum{FT_DIRECTORY=0x80000000};
+struct FileBlock {u16_t packed_size,real_size,flags,crc;u32_t offset;FileBlock(u32_t o,u16_t a,u16_t b,u16_t c,u16_t z):packed_size(a),real_size(b),flags(c),crc(z),offset(o){}};
+struct FileInfo {typedef Ptr<FileInfo>Ptr;StringW name;FileInfo*dir=nullptr;ArrayT<Ptr>ls;BufferT<FileBlock>blocks;unsigned flags=0,size=0;u32_t spack_offs=0;byte_t sign[16]={0};BufferT<FileBlock>&Blocks(){return blocks;}};
+typedef FileInfo::Ptr FileInfoPtr;
+struct _Packager:Packager {FileInfoPtr root_;unsigned package_base_;byte_t crypokey_[16];DataStreamPtr ds_;unsigned stream_ptr_,stream_size_;struct{void Clear(){}}sources_;bool Start(DataStream*,pchar_t,EhFilter);bool _WriteContent(StringParam,FileInfoPtr&,EhFilter);bool Finish(u32_t*,EhFilter);};
+template<class T,class F>void Qsort(T*b,T*e,F f){std::sort(b,e,f);}
+static_assert(sizeof(void*)==4,"Original writer requires Win32");
+static_assert(sizeof(SPACK_FILE_INFO)==52,"Official SVFS_PACKER wire layout");
+
+struct StringA{std::string s;StringA(const char*p=""):s(p){}int Length()const{return (int)s.size();}const char*operator+()const{return s.c_str();}};
+struct Tuple{uint32_t _0,_3;StringA _1;byte_t _2[16]={0};Tuple(uint32_t o,const char*n):_0(o),_3(0),_1(n){}};
+static void Md5S(const char*p,byte_t out[16]){MD5_Hash h;h.Update(p,strlen(p));h.Finalize(out);}

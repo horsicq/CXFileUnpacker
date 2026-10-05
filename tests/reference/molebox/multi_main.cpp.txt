@@ -1,0 +1,14 @@
+/* GPL-3.0 test adapter for original MoleBox writer; never deployed. */
+#include "adapter.hpp"
+#include "packager_excerpt.cpp"
+#include "catalog_excerpt.cpp"
+static bool AddPackage(DataStream*out,const char*password,unsigned flags,u32_t*offset){_Packager pkg;if(!pkg.Start(out,password,nullptr))return false;
+    auto folder=RccPtr(new FileInfo);folder->name=StringW(L"folder");folder->flags=FT_DIRECTORY;folder->dir=+pkg.root_;pkg.root_->ls.Append(folder);
+    auto file=RccPtr(new FileInfo);file->name=StringW(L"file.bin");file->flags=flags;file->dir=+folder;folder->ls.Append(file);
+    std::vector<byte_t> data(100003);for(size_t i=0;i<data.size();++i)data[i]=(byte_t)(i*17+3);source.files[L"fixture"]=data;
+    if(!pkg._WriteContent(L"fixture",file,nullptr))return false;
+    auto empty=RccPtr(new FileInfo);empty->name=StringW(L"empty");empty->dir=+pkg.root_;pkg.root_->ls.Append(empty);return pkg.Finish(offset,nullptr);}
+int main(int argc,char**argv){if(argc!=2)return 1;DataStream out;byte_t prefix[64]={0};prefix[0]='M';prefix[1]='Z';out.Write(prefix,64);u32_t first=0,second=0;
+    if(!AddPackage(&out,"secret",6,&first)||!AddPackage(&out,"password",7,&second))return 2;
+    ArrayT<Tuple>pkgs,mounts;pkgs.Append(Tuple(first,"one"));pkgs.Append(Tuple(second,"two"));Tuple a(1,"*"),b(1,"*");Md5S("secret",a._2);Md5S("password",b._2);mounts.Append(a);mounts.Append(b);if(!MakeCatalog(&out,pkgs,mounts))return 3;
+    FILE*f=fopen(argv[1],"wb");if(!f)return 4;fwrite(out.v.data(),1,out.v.size(),f);fclose(f);printf("%u %u\n",first,second);return 0;}
