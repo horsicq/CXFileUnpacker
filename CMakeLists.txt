@@ -79,11 +79,11 @@ endif()
 xfu_c_target(XFileUnpacker)
 
 # Offline tool for investigating detection and reader coverage on real corpora.
-add_executable(xfileunpacker_probe_readers EXCLUDE_FROM_ALL tools/probe_readers.c)
+add_executable(xfileunpacker_probe_readers EXCLUDE_FROM_ALL tests/probe_readers.c)
 target_include_directories(xfileunpacker_probe_readers PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
 target_link_libraries(xfileunpacker_probe_readers PRIVATE xfileunpacker_core)
 xfu_c_target(xfileunpacker_probe_readers)
-add_executable(xfileunpacker_probe_metadata EXCLUDE_FROM_ALL tools/probe_metadata.c)
+add_executable(xfileunpacker_probe_metadata EXCLUDE_FROM_ALL tests/probe_metadata.c)
 target_include_directories(xfileunpacker_probe_metadata PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
 target_link_libraries(xfileunpacker_probe_metadata PRIVATE xfileunpacker_core)
 if(WIN32)
@@ -396,7 +396,6 @@ if(BUILD_TESTING)
     set_tests_properties(console_roundtrip PROPERTIES TIMEOUT 120)
 endif()
 
-include(cmake/sevenzip_formats.cmake)
 include(cmake/uniextract_formats.cmake)
 include(cmake/wim_legacy_formats.cmake)
 

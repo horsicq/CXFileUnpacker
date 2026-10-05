@@ -29,9 +29,7 @@ The Universal Extractor 2 expansion adds native Chromium DataPack, Windows
 thumbnail-cache, Enigma, BitRock, Smart Install Maker and MoleBox payload readers;
 gettext/Qt catalogs, MIME messages,
 Windows Help streams, SQLite SQL export and Microsoft Reader books; new game
-resource readers; and decoded multimedia and PDF outputs. The Windows x64
-bundle includes separate bounded helpers for 7-Zip, FFmpeg, PDFium, GARbro,
-ConvertLIT, UPX and archive codecs, with their runtime dependencies and notices.
+resource readers; and decoded multimedia and PDF outputs.
 TEST sends decoded bytes to memory and quiet console testing reports percentages;
 `--verbose` reports each member's result.
 
@@ -52,10 +50,8 @@ memory/member limits and cancellation apply. Recovery archives, split volumes,
 key files and other unverified variants
 remain unsupported.
 
-The installed `share/doc/xfileunpacker/UNIVERSAL_EXTRACTOR_FORMATS.md` and
-`uniextract2-coverage.json` account for all 124 named families in the UE2 list.
-Each row states available payload actions and missing variants. Recognized types
-and registered handlers do not imply complete extraction or writing support.
+Recognized types and registered handlers do not imply complete extraction
+or writing support.
 `--reader garbro` or `--reader garbro:TAG` selects the game engine explicitly;
 automatic fallback uses catalog signatures and extensions. Magicless game files
 renamed to an unrelated suffix may need explicit reader selection.
@@ -136,64 +132,9 @@ xfu x archive.zip -ooutput --password-env=ARCHIVE_PASSWORD
 xfu t archive.zip -pmy-password
 ```
 
-`tools/research_password_archives.py` inspects the classified password archives
-and checks a bounded set of local hints. A matching encryption header is only a
-candidate: complete member decoding and CRC validation are required before a
-password is reported as recovered. `tools/verify_password_recoveries.py` verifies
-every native extracted member against its archive size and CRC and records
-SHA-256 hashes. `tools/research_ace_password.py` can independently check ACE
-candidates using a separately supplied upstream `acefile.py`.
-
-For a repeatable corpus audit, `tools/verify_arc_corpus.py` selects the smallest
-direct file in every nonempty subfolder, recursively. It keeps extraction logs,
-output SHA-256 hashes and CSV/JSON results in a new report directory. Empty
-container folders are recorded separately. Samples are only read as data.
-
-```powershell
-python tools/verify_arc_corpus.py --root F:\ARC\ARC1_err `
-  --unpacker build/Release/xfu.exe --report-dir build/arc-audit `
-  --timeout 120 --jobs 4
-```
-
-Use `--replay <earlier-report.json>` to repeat the exact sample selection.
-Add `--snapshot` to keep input copies in the report directory, and `--relocate`
-to resolve moved replay inputs by unique filename and size. An interrupted run
-can continue with `--resume` and the same report directory and unpacker binary;
-completed results are kept and remaining samples use their saved snapshots.
-Timeouts, failed extractions and successful empty archives have separate statuses.
-The offline `xfileunpacker_probe_readers` build target can validate named readers
-against a sample when investigating a detection or parser failure.
-
-To inspect every file and copy only categories supported by evidence, build
-`xfileunpacker_probe_metadata` and run the all-file tools:
-
-```powershell
-cmake --build build --config Release --target xfileunpacker_probe_metadata
-python tools/inventory_all_arc.py --root F:\ARC\ARC1_err --report-dir build/arc-all-audit
-python tools/scan_all_arc_files.py --report-dir build/arc-all-audit `
-  --unpacker build/Release/xfu.exe --probe build/Release/xfileunpacker_probe_metadata.exe `
-  --research <research-report.json> --jobs 8
-python tools/verify_all_arc_scan.py --report-dir build/arc-all-audit
-```
-
-The inventory reads and hashes every original file. The scanner creates
-`corrupted`, `new file format`, and `password` under the input folder, preserving
-each original relative path and verifying every copy's SHA-256 independently.
-These output folders are excluded from later inventories. Originals remain in
-place. A reader failure alone does not establish damage: unresolved layouts,
-possible missing split volumes, and resource limits remain uncategorized in
-`report.csv` and `report.json`. The research report supplies earlier findings
-only for identical SHA-256 contents. Use `--resume` after an interrupted scan.
-
-Metadata probing can decode audited readers without creating extracted files.
-Its JSON reports the integrity contract and limitations: ZIP and GST check
-CRC32; IVT and Silmarils check framing and size; LHA checks decoded size and
-payload CRC16. A passing test therefore means
-the selected reader completed the checks it implements. Other readers use the
-native archive test in isolated temporary folders, with time, memory, and output
-limits. Inputs are never executed. The final verifier independently checks every
-original and categorized copy against the inventory and reports missing or
-unexpected output files.
+The optional `xfileunpacker_probe_readers` and
+`xfileunpacker_probe_metadata` build targets support local reader
+and metadata diagnostics.
 
 `xfu --formats` (or `xfu i`) lists every file type in xxfclib's format catalog.
 A compact grouped catalog is in [docs/CURRENT.md](docs/CURRENT.md).
@@ -389,7 +330,7 @@ uses RAM chunks without temporary files. Stored creation and native reading
 work without that runtime; unavailable compression fails before an existing
 destination is truncated. These compression switches are console options;
 GUI/TUI startup uses their controls.
-The bundled Windows x64 7-Zip engine
+The Windows x64 7-Zip engine, when supplied separately,
 provides all 60 readers in 7-Zip 26.03. Use `--reader sevenzip` for automatic
 engine selection, including embedded SFX archives, or select a named handler such
 as `--reader sevenzip_apfs`. `--reader sevenzip_pe`, `sevenzip_elf` and
