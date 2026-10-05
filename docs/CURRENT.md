@@ -1,12 +1,27 @@
 # Supported formats
 
-Updated 2026-10-01. **1,470 file types** from XFileUnpacker's xxfclib catalog,
-including variants and the Binary fallback. This build excludes `die_engine`.
+Updated 2026-10-04. **1,613 file types** from
+XFileUnpacker's xxfclib catalog, including variants and the Binary fallback.
+This build excludes `die_engine`. The original 1,471-row table remains below;
+25 prior HxC rows and the additions appear in separate tables at the end.
 The catalog covers detection and inspection; listing and extraction depend on the
 supported variant. Media readers may export encoded components. Flat list:
 `xfu --formats --color=never`.
 ZIP also covers OOXML, OpenDocument, EPUB and CBZ containers.
+The bundled Windows x64 7-Zip engine
+adds all 60 released 26.03 reader handlers and the numbered-split file type
+(ID 2603, `.001`). Creation is enabled for 7z, ZIP, TAR, GZIP, BZIP2, XZ and WIM.
 Extensions are conventional or documented filename suffixes; **—** means no suffix is established here.
+
+The [HxC additions](HXC_FORMATS.md) add 23 structured disk/track readers,
+102 explicit raw geometry profiles and a generic XML layout reader. The
+[coverage matrix](HXC_COVERAGE.md) maps every row in the referenced HxC page and
+states whether a reader exposes files, sectors, encoded tracks or flux.
+
+Archive testing uses memory without extraction paths or temporary disk files.
+Seekable decoder workspaces have an aggregate 256 MiB RAM ceiling and never
+fall back to disk. `xfu t archive` shows aggregate percentages;
+`xfu t archive --verbose` (or `-v`) shows each member's `OK`/`FAILED` result.
 
 ## Archives (170)
 
@@ -276,7 +291,7 @@ Extensions are conventional or documented filename suffixes; **—** means no su
 | `ZLIB` | `.zlib` | Standalone RFC 1950 zlib stream. |
 | `ZSTD` | `.zst` | Decode every standard frame in the stream to a caller-provided device. |
 
-## Packages, installers and self-extractors (182)
+## Packages, installers and self-extractors (183)
 
 | Format | Extension(s) | Description |
 | --- | --- | --- |
@@ -317,6 +332,7 @@ Extensions are conventional or documented filename suffixes; **—** means no su
 | `F Install disk data` | — | F Install disk files containing tables of uncompressed installation members. |
 | `FinEAR` | — | "FINEAR" installer transport: a 17-byte header followed by a single LZHUF (LHA -lh1-) stream. |
 | `FlashJester Jugglor` | `.exe` | FlashJester Jugglor 2.x projector bundles (and "Exe Attachment"). |
+| `sfx inftool` | `.exe` | INFTool MRI self-extractors with masked CAB or older RSFX-terminated ZIP local records; encrypted ZIP members require a password. |
 | `FLD` | `.fld` | CodeBase installation file group with sequential compressed records. |
 | `FPAK` | `.pak` | FoxPro Distribution Kit (.pak) archive. |
 | `FRONTPAGETHEME` | `.elm` | Microsoft FrontPage theme package containing stored resource members. |
@@ -394,7 +410,7 @@ Extensions are conventional or documented filename suffixes; **—** means no su
 | `Setup Factory` | `.exe` | Setup Factory versions five or six executables exposing installation payload records. |
 | `sfx 7zip` | `.exe` | Self-extracting 7ZIP carrier exporting the validated embedded payload component. |
 | `sfx ace` | `.exe` | Self-extracting ACE carrier exporting the validated embedded payload component. |
-| `SFX AD01` | `.exe` | Active Delivery self-extractor containing a protected embedded ZIP archive. |
+| `SFX AD01` | `.exe` | Active Delivery self-extractor; recovers both embedded password groups and validates every delivered file. |
 | `sfx ain` | `.exe` | Self-extracting AIN carrier exporting the validated embedded payload component. |
 | `sfx alz` | `.exe` | Self-extracting ALZ carrier exporting the validated embedded payload component. |
 | `sfx arc` | `.exe` | Self-extracting ARC carrier exporting the validated embedded payload component. |
@@ -434,7 +450,7 @@ Extensions are conventional or documented filename suffixes; **—** means no su
 | `sfx tar` | `.exe` | Self-extracting TAR carrier exporting the validated embedded payload component. |
 | `sfx tgcf` | `.exe` | Self-extracting TGCF carrier exporting the validated embedded payload component. |
 | `SFX VMS DCX` | `.exe` | VMS DCX self-extractor preserving file-description and saveset streams. |
-| `sfx zipcentral` | `.exe` | Self-extracting ZIPCENTRAL carrier exporting the validated embedded payload component. |
+| `sfx zipcentral` | `.exe` | Self-extracting ZIP carrier with member extraction and verified embedded-password recovery for Demolition-FX. |
 | `sfx zoo` | `.exe` | Self-extracting ZOO carrier exporting the validated embedded payload component. |
 | `sfx zpak` | `.exe` | Self-extracting ZPAK carrier exporting the validated embedded payload component. |
 | `SFXSTART` | `.exe` | "SFXSTART" self-extracting executable (stored setup-kit container). |
@@ -666,7 +682,7 @@ Extensions are conventional or documented filename suffixes; **—** means no su
 | `gbi` | `.gbi` | gBurner GBI compressed disc image. |
 | `Gotek disk collection` | — | Gotek disk collection containing fixed-geometry floppy images. |
 | `HDCopy` | `.img` | HD-COPY floppy image with stored or compressed track data. |
-| `HFE` | `.hfe` | HxC HFE floppy image preserving encoded track-bit data. |
+| `HFE` | `.hfe` | HxC HFE floppy image, including checksum-verified IBM and Amiga MFM sectors; unavailable Amiga tracks produce an explicitly partial ADF. |
 | `hsf` | `.iso` | High Sierra (pre-ISO 9660) CD-ROM image. |
 | `hxc mfm` | `.mfm` | HxC MFM captures preserving indexed raw bitcell tracks without decoding. |
 | `HxC Stream HFE` | `.hfe` | HxC "Stream HFE" flux image. |
@@ -1562,3 +1578,169 @@ Extensions are conventional or documented filename suffixes; **—** means no su
 | Format | Extension(s) | Description |
 | --- | --- | --- |
 | `BINARY` | — | Unclassified raw data. |
+
+## Previously documented HxC readers (25)
+
+These readers were already included in the 1,496-type base catalog and linked
+from the original table's introduction. Their individual rows are supplied
+here to complete that table. [HxC format notes](HXC_FORMATS.md) describe aliases,
+explicit profiles and the distinction between sectors, encoded tracks and flux.
+
+| ID | Format | Reader | Extension(s) | Capability and principal limits |
+| --- | --- | --- | --- | --- |
+| 2100 | `amiga ext adf` | `amiga_ext_adf` | `.adf` | UAE-1ADF descriptors and original allocated sector/MFM tracks; revolution and bit-length metadata retained. |
+| 2101 | `amiga old ext adf` | `amiga_old_ext_adf` | `.adf` | Old UAE--ADF sync/length descriptors and original sector or restored-sync MFM tracks. |
+| 2102 | `atari dim` | `atari_dim` | `.dim` | Full DIM sector image; sparse used-sector payload preserved with logical reconstruction explicitly unavailable. |
+| 2103 | `atari stt` | `atari_stt` | `.stt` | Validated indexed sector/raw sections and original track components; intentional bad ID CRC retained. |
+| 2104 | `atari stw` | `atari_stw` | `.stw` | Original big-endian clock/data MFM words per declared track. |
+| 2105 | `discferret dfi` | `discferret_dfi` | `.dfi` | Bounded DFER/DFE2 framed flux/index captures and descriptors; no flux-to-filesystem conversion. |
+| 2106 | `hxc afi` | `hxc_afi` | `.afi` | CRC-validated AFI records and exact zlib data; reserved RLE/LZW blocks remain opaque components. |
+| 2107 | `hxc qd` | `hxc_qd` | `.qd` | Original LSB cell bytes, switch-position index and track descriptors. |
+| 2108 | `hxc stream` | `hxc_stream` | `.hxcstream` | Pauline CHKH packet CRC32, exact LZ4/pulse decoding and original authenticated packet padding. |
+| 2109 | `svd` | `svd` | `.svd` | Author 1.2/1.5/2.0 track descriptors and rotated blocks; WD tracks also unrotated. |
+| 2110 | `sdu` | `sdu` | `.sdu` | SAB Diskette Utility declared geometry and complete stored sector image. |
+| 2111 | `fei` | `fei` | `.fei` | Side-major LSB MFM tracks; recognition requires coherent IBM ID CRCs and track boundaries. |
+| 2112 | `oric dsk` | `oric_dsk` | `.dsk` | ORICDISK sector tracks or MFM_DISK clock-stripped track bytes and original descriptor. |
+| 2120 | `ensoniq gkh` | `ensoniq_gkh` | `.gkh` | Tagged geometry, stored sector image and bounded author/subject records. |
+| 2121 | `ensoniq ede` | `ensoniq_ede` | `.ede` | EDE-family bitmap sector reconstruction, including mixed Mirage/DPX sectors; unresolved computer-format flag 1 rejected. |
+| 2122 | `samcoupe sad` | `samcoupe_sad` | `.sad` | Aley SAD declared geometry and stored sector image. |
+| 2123 | `apple nib` | `apple_nib` | `.nib` | NIB/NB2 authenticated Apple sector recovery and native DOS/ProDOS/Pascal files when complete; original tracks retained. |
+| 2124 | `ti99 pc99` | `ti99_pc99` | `.pc99` | FM/MFM token tracks with sector framing and stored/controller-generated CRC checks. |
+| 2125 | `emax disk` | `emax_disk` | `.em1` | Stored Emax bank/sample blocks; missing OS blocks reported as an incomplete disk dependency. |
+| 2126 | `emulatorii eii` | `emulatorii_eii` | `.eii` | Explicit headerless stored sample/bank blocks; missing OS tracks reported as an incomplete disk dependency. |
+| 2127 | `casio fzf` | `casio_fzf` | `.fzf` | Validated full/bank Casio dumps, multi-bank metadata and canonical one-bank dumps; bank/voice/PCM exports. Split continuations rejected. |
+| 2128 | `vtr disk` | `vtr_disk` | `.vtr` | Indexed track data deinterleaved and bit-reversed into original declared cells; no filesystem conversion. |
+| 2129 | `speccydos sdd` | `speccydos_sdd` | `.sdd` | TRKY2 side-sequential stored sectors normalized to a disk image. |
+| 2150 | `hxc raw floppy` | `hxc_raw_floppy` | `.raw` | 102 explicit geometry profiles or caller layout; original raw plus source/fill/inline sectors, no size-only detection. |
+| 2151 | `hxc xml disk layout` | `hxc_xml_disk_layout` | `.xml` | HxC disk_layout XML retained with initialized sectors; external raw device only through explicit API, no external entity/path loading. |
+
+
+## Open-source coverage additions (116)
+
+These rows add 26 archive/codec readers, 19 Apple/filesystem/layout readers,
+16 disk/tape carriers and 55 filesystem/partition/object/volume readers.
+The capability and principal-limits column below summarizes supported
+variants. An image or track export is distinct from
+filesystem-file extraction. Metadata-only filesystem rows intentionally match
+upstream identification support; they do not traverse file data. Ambiguous raw
+formats require explicit `--reader NAME` selection. Existing FreeArc extra
+codecs/encryption and UPX executable decompression are outside these additions.
+
+| ID | Format | Reader | Extension(s) | Capability and principal limits |
+| --- | --- | --- | --- | --- |
+| 2200 | `NSIS` | `nsis` | `.exe` | Decoded stored, zlib, NSIS BZip2 and LZMA members, including supported solid layouts; unsupported instructions/BCJ filters fail explicitly. |
+| 2201 | `NOWCOMPRESS` | `nowcompress` | `.now` | Native Macintosh file and resource forks for supported Now Compress revisions. |
+| 2202 | `CPM_CRUNCH` | `cpm_crunch` | `.crn` | CP/M Crunch LZW and CRLZH LZHUF payloads. |
+| 2203 | `AMPLUS` | `amplus` | `.apu` | Native stored/internal-compression entries; XPK methods unsupported. |
+| 2204 | `WARP` | `warp` | `.warp` | Decoded disk tracks/sectors with format checksums. |
+| 2205 | `LHWARP` | `lhwarp` | `.lhw` | Decoded disk tracks/sectors for supported revision headers. |
+| 2206 | `COMPDISK` | `compdisk` | `.comp` | Stored/LZW cylinder payloads and CRC validation. |
+| 2207 | `ARC_CBM` | `arc_cbm` | `.arc` | Stored and supported CBM compression modes, including authenticated SFX carrier; mode 5 unsupported. |
+| 2208 | `CRUNCHDISK` | `crunchdisk` | `.cdf` | Stored/PowerPacker disk cylinders; XPK unsupported. |
+| 2209 | `LHF` | `lhf` | `.lhf` | Decoded members from bounded LhF records. |
+| 2210 | `SHRINK_CDAF` | `shrink_cdaf` | `.shr` | Decoded file entries from IFF-CDAF Shrink containers. |
+| 2211 | `SPACK` | `spack` | `.spk` | Decoded entries from PACKFI/index and authenticated HUNK SFX. |
+| 2212 | `PCOMPRESS_PACK` | `pcompress_pack` | `.pack` | Decoded PCompress PACK entries. |
+| 2213 | `BALZ` | `balz` | `.balz` | Native BALZ payload decoder, bounded input/output. |
+| 2214 | `QUAD` | `quad` | `.quad` | QUAD 1.12 payload decoder through helper; weak size-only header requires explicit selection or validated .quad extension. |
+| 2215 | `PAQ8` | `paq8` | `.paq8f`, `.paq8jd`, `.paq8l`, `.paq8o` | PAQ8F, PAQ8JD, PAQ8l and PAQ8O payload decoders through helper; unsupported revisions fail explicitly. |
+| 2216 | `LRZIP` | `lrzip` | `.lrz` | LRZIP 0.6 stored/BZip2/LZO/LZMA/zlib chunks and links, CRC/MD5; encryption, ZPAQ and newer framing unsupported. |
+| 2217 | `GRZIP` | `grzip` | `.grz` | GRZipII framed blocks with header/data CRC and helper decompression. |
+| 2218 | `LPAQ1` | `lpaq1` | `.lpaq1` | LPAQ1 payload decoder through the bounded RAM helper. |
+| 2219 | `LPAQ5` | `lpaq5` | `.lpaq5` | LPAQ5 payload decoder through the bounded RAM helper. |
+| 2220 | `SAVAGE` | `savage` | `.svg` | Savage LH5 disk payload decoded to a 901120-byte ADF image with mandatory CRC16. |
+| 2221 | `MXM_SIMPLEARC` | `mxm_simplearc` | `.sfx` | Recognized Amiga HUNK producer stub, stored named files and bounded linked extents. |
+| 2222 | `SDS_SFX` | `sds_sfx` | `.sfx` | Recognized Amiga HUNK producer stub; DMS-medium literals/matches and each member's additive checksum. |
+| 2223 | `LHPAK_SFX` | `lhpak_sfx` | `.sfx` | Recognized Amiga HUNK producer stub; linked Zoom LH blocks, header additive checksum, packed CRC32 and complete compressed-byte consumption. |
+| 2224 | `LHSFX` | `lhsfx` | `.sfx` | Recognized Amiga HUNK custom records and complete Zoom LH decoding; this format has no payload checksum. |
+| 2225 | `S_OMNI` | `s_omni` | `.sfx` | Two recognized Amiga HUNK producer layouts; stored or Zoom LH members, with packed CRC32 for LH payloads. |
+| 2300 | `AppleLink PE` | `applelink_pe` | `.acu` | ACU stored/Squeeze files and header CRC; producer differences in long-file data CRC remain a documented limit. |
+| 2301 | `Trackstar APP` | `trackstar` | `.app` | Trackstar 40/80-track carrier and authenticated Apple sector recovery; nested DOS/ProDOS/Pascal files when available. |
+| 2302 | `Gutenberg filesystem` | `gutenberg` | `.dsk`, `.do`, `.po` | Native linked catalog and file chains in DOS or ProDOS sector order. |
+| 2303 | `SSI Apple RDOS` | `apple_rdos` | `.dsk`, `.do`, `.po`, `.d13` | SSI RDOS catalog entries and bounded file extents. |
+| 2304 | `AmDOS disk layout` | `amdos` | `.dsk`, `.po`, `.img` | Two DOS volumes on 800 KiB media, native nested files; explicit selection because raw layout is ambiguous. |
+| 2305 | `OzDOS disk layout` | `ozdos` | `.dsk`, `.po`, `.img` | Two DOS volumes interleaved in 512-byte blocks, native nested files. |
+| 2306 | `UniDOS disk layout` | `unidos` | `.dsk`, `.po`, `.img` | Two contiguous 400 KiB DOS volumes, native nested files; explicit selection. |
+| 2307 | `CFFA disk layout` | `cffa` | `.img`, `.hdv`, `.po` | Fixed CFFA multi-volume layout, nested supported filesystems; empty slots are skipped. |
+| 2308 | `Apple DOS hybrid disk` | `apple_dos_hybrid` | `.dsk`, `.do`, `.po` | Overlapping DOS + ProDOS/Pascal views and validated Apple-DO CP/M files. CP/M requires a nonempty native directory and no conflicting block-filesystem root; output uses CPM/USERnn paths and 128-byte record lengths. |
+| 2309 | `DOS.MASTER disk layout` | `dos_master` | `.po`, `.hdv` | Embedded DOS volume extraction with ProDOS allocation evidence or explicit profile. |
+| 2310 | `FocusDrive partition map` | `focusdrive` | `.img`, `.hdv` | Parsons FocusDrive map and bounded partition streams/nested supported filesystems. |
+| 2311 | `Apple MicroDrive partition map` | `microdrive` | `.img`, `.hdv` | Apple II JL MicroDrive map and bounded partition streams/nested supported filesystems. |
+| 2312 | `Macintosh TS partition map` | `mac_ts` | `.img`, `.hdv` | Early Macintosh TS partition map and partition-image extraction. |
+| 2313 | `Pascal ProFile Manager` | `pascal_profile_manager` | `.po`, `.hdv` | PASCAL.AREA embedded Pascal volumes with absolute block addressing. |
+| 2314 | `Apple Lisa filesystem` | `lisa_fs` | `.img`, `.dc42` | LisaOS flat/B-tree catalogs and small extent maps on tagged DC42 microfloppies (12-byte tags); tagless/24-byte-tag disks unsupported. |
+| 2315 | `3DO Opera filesystem` | `opera_fs` | `.iso`, `.img` | 3DO Opera directory traversal, burst/gap extents and file data. |
+| 2316 | `CD-i Green Book filesystem` | `cdi_fs` | `.iso`, `.img` | CD-i big-endian paths/directories and files from cooked or Mode 2 Form 1 sectors; Form 2 kept as diagnostic components. |
+| 2317 | `BSD disklabel` | `bsd_disklabel` | `.img`, `.dd` | Dual-magic/XOR-checked BSD disklabel and bounded partition-image extraction. |
+| 2318 | `Apple II cassette WAV` | `apple_cassette` | `.wav` | Apple II cassette WAV pulse decoding with checksums and payload extraction. |
+| 2400 | `Basic Lisa Utility BLU` | `lisa_blu` | `.blu` | BLU sector data and Lisa tags; no Lisa filesystem inference from the carrier alone. |
+| 2401 | `BlindWrite 4` | `blindwrite4` | `.bwt` | BWT descriptor, BWI track data and optional BWS subchannels; companion data required; borrowed RAM devices supported. |
+| 2402 | `CisCopy DC-File` | `ciscopy` | `.dcf` | Uncompressed CisCopy inclusion maps reconstructed as sector images. |
+| 2403 | `CopyTape tape image` | `copytape` | `.cptp` | Variable tape records and filemarks preserved. |
+| 2404 | `DataPackRat WC Disk Image` | `wc_disk_image` | `.d2f`, `.f2d` | DataPackRat WC sector records, 512-byte sectors. |
+| 2405 | `Digital Research DiskCopy` | `dri_diskcopy` | `.dsk` | Digital Research DiskCopy footer geometry and sector data. |
+| 2406 | `MAXI Disk` | `maxi_disk` | `.hdk` | MAXI Disk header geometry and bounded sector image. |
+| 2407 | `Ray Arachelian DIM` | `ray_dim` | `.dim` | Ray Arachelian DIM headers and stored sector image. |
+| 2408 | `RS-IDE disk image` | `rs_ide` | `.ide` | RS-IDE header geometry and stored sector image. |
+| 2409 | `T98 hard disk image` | `t98_hdd` | `.thd`, `.t98` | T98 HDD header geometry and stored sector image. |
+| 2410 | `86Box 86F` | `pc_86f` | `.86f` | 86Box 86F encoded tracks and available sector recovery; damaged/unrecoverable tracks remain explicit components. |
+| 2411 | `FDX68 FDX` | `fdx68_fdx` | `.fdx` | FDX68 track/raw-sampling frames preserved. |
+| 2412 | `Heathkit H17` | `heathkit_h17` | `.h17`, `.h17disk` | Heathkit H17 track/sector records and recovered sectors. |
+| 2413 | `Bochs Growing disk image` | `bochs_growing` | `.img`, `.bochs` | Bochs growing sparse-image mapping and logical disk-image extraction. |
+| 2414 | `HxC logic-analyzer import profile` | `hxc_logic_analyzer` | `.logicbin8bits` | Unframed logic samples/flux edges; explicit sampling rate and signal bit profile required. |
+| 2415 | `Micral N raw floppy geometry` | `micral_n_raw` | `.mic` | Explicit Micral N raw geometry, bounded sectors; raw bytes cannot establish machine identity. |
+| 2500 | `Android LP dynamic partition image` | `android_lp` | `.img` | SHA-256-checked LP metadata; single-image linear/zero logical partition extents. |
+| 2501 | `LVM2 physical volume` | `lvm2` | `.lvm` | Checksummed single-PV LVM2 metadata; multi-segment linear logical volumes. Missing PVs and unsupported segment types fail. |
+| 2502 | `COFF object file` | `coff_object` | `.obj` | COFF sections, symbol/string tables and long section names; bigobj unsupported. |
+| 2503 | `UEFI TE executable` | `te_executable` | `.te` | UEFI TE sections with stripped-header offset adjustment. |
+| 2520 | `AtheOS filesystem` | `atheos_fs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2521 | `BeOS filesystem` | `beos_fs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2522 | `Coherent UNIX filesystem` | `coherent_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2523 | `DEC Files-11 ODS-2` | `ods2_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2524 | `DEC RT-11 filesystem` | `rt11_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2525 | `ECMA-67 filesystem` | `ecma67_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2526 | `F2FS` | `f2fs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2527 | `Plan 9 Fossil filesystem` | `fossil_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2528 | `HAMMER filesystem` | `hammer_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2529 | `HPOFS` | `hpofs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2530 | `HP Logical Interchange Format` | `hp_lif` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2531 | `Linux JFS` | `jfs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2532 | `Original Linux ext filesystem` | `linux_ext` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2533 | `Locus filesystem` | `locus_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2534 | `HPFS` | `hpfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2535 | `ReFS` | `refs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2536 | `NILFS2` | `nilfs2` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2537 | `Amiga Professional File System` | `amiga_pfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2538 | `QNX4 filesystem` | `qnx4` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2539 | `Reiser filesystem` | `reiserfs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. ReiserFS 3.x files; Reiser4 provides superblock metadata only. |
+| 2540 | `SGI EFS` | `sgi_efs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2541 | `Amiga Smart File System` | `amiga_sfs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2542 | `SolarOS filesystem` | `solar_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2543 | `UNICOS filesystem` | `unicos_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2544 | `UNIX System V filesystem` | `sysv_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2545 | `UNIX Version 7 filesystem` | `unix_v7` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2546 | `UnixWare Boot File System` | `unix_bfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2547 | `Veritas VxFS` | `vxfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2548 | `VMware VMFS` | `vmfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2549 | `Xenix filesystem` | `xenix_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2550 | `Xia filesystem` | `xia_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2551 | `XFS` | `xfs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2552 | `ZFS` | `zfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
+| 2553 | `GFS2` | `gfs2` | `.img` | Native GFS2 directories, stuffed/indirect/sparse/journaled data, hash leaves and regular file bytes within documented bounds. |
+| 2560 | `Acorn Linux / RISCiX partitions` | `acorn_partitions` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2561 | `ACT Apricot partitions` | `apricot_partitions` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2562 | `Atari AHDI / ICD Pro partitions` | `atari_ahdi` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2563 | `DEC disklabel` | `dec_disklabel` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2564 | `DragonFly BSD64 disklabel` | `dragonfly_disklabel` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2565 | `Human68k partitions` | `human68k_partitions` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2566 | `Minix subpartitions` | `minix_partitions` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2567 | `NEC PC-9800 partitions` | `pc98_partitions` | `.img` | PC-9800 CHS map; explicit sector-byte/head/sector geometry required; partition-image extraction. |
+| 2568 | `NeXT disklabel` | `next_disklabel` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2569 | `Plan 9 partitions` | `plan9_partitions` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2570 | `Rio Karma partitions` | `rio_karma_partitions` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2571 | `SGI volume header` | `sgi_volume_header` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2572 | `Xbox 360 disk layout` | `xbox360_layout` | `.img` | Xbox 360 retail fixed region offsets and declared lengths, including overlapping Aaru-compatible views; requires sufficiently large source. |
+| 2573 | `XENIX partitions` | `xenix_partitions` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |
+| 2580 | `Advanced Forensic Format` | `aff` | `.aff` | AFF10 stored/zlib/LZMA/zero pages and latest revisions; encrypted segments and digital-signature authentication unsupported. |
+| 2581 | `Linux MD RAID` | `md_raid` | `.img` | MD v1/v0.90 clean synchronized RAID1 member and supported single-member linear/RAID0 streams; general multi-disk assembly unsupported. |
+| 2582 | `Windows Logical Disk Manager` | `windows_ldm` | `.img` | Committed LDM 4.10 basic/single-disk spanned volume extents; striped/missing-disk volumes fail. |

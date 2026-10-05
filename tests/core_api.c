@@ -58,6 +58,9 @@ static void observe_entry(void *user, const xfu_entry *entry) {
     /* Callback values are borrowed. Retain only a copy made during the call. */
     if (strlen(entry->name) >= sizeof(seen->names[index]))
         seen->invalid_entry = true;
+    /* Ordinary TAR records have no recovered credential, including when
+     * the caller independently supplies an operation password. */
+    if (entry->embedded_password) seen->invalid_entry = true;
     snprintf(seen->names[index], sizeof(seen->names[index]), "%s", entry->name);
     seen->packed[index] = entry->packed_size;
     seen->unpacked[index] = entry->unpacked_size;
@@ -195,6 +198,12 @@ int main(void) {
     CHECK(seen.saw_archive_info && seen.saw_summary);
     CHECK(seen.progress_calls >= 3 && seen.named_progress >= 2);
     CHECK(seen.max_completed == 2 && !seen.invalid_progress);
+
+    memset(&seen, 0, sizeof(seen));
+    request.password = "caller-option-is-not-an-embedded-password";
+    CHECK(xfu_run(&request) == 0);
+    CHECK(seen.entry_count == 2 && !seen.invalid_entry);
+    request.password = NULL;
 
     /* Remove the sources so a successful extract must recreate the bytes.
      * The second payload includes NUL and high bytes, not just UTF-8 text. */

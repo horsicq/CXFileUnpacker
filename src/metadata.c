@@ -85,7 +85,7 @@ static const char *meta_name(uint32_t id) {
 }
 
 /* Preserve full strings, including embedded NULs, and every byte of blobs. */
-static char *text_bytes(const unsigned char *data, size_t size, bool hex) {
+static char *text_bytes(const unsigned char *data, size_t size, bool hex, bool escape_slashes) {
     static const char digits[] = "0123456789ABCDEF";
     char *text;
     size_t i, used = 0;
@@ -97,6 +97,8 @@ static char *text_bytes(const unsigned char *data, size_t size, bool hex) {
         if (hex) {
             if (i) text[used++] = ' ';
             text[used++] = digits[c >> 4]; text[used++] = digits[c & 15];
+        } else if (escape_slashes && c == '\\') {
+            text[used++] = '\\'; text[used++] = '\\';
         } else if (c < 32 || c == 127) {
             text[used++] = '\\'; text[used++] = 'x';
             text[used++] = digits[c >> 4]; text[used++] = digits[c & 15];
@@ -112,7 +114,10 @@ static char *variant_text(const xx_var *var, uint32_t id) {
     switch (var->type) {
     case XX_VAR_TYPE_NONE: return copy_string("<none>");
     case XX_VAR_TYPE_STRING: case XX_VAR_TYPE_STRING_VIEW:
-        return text_bytes((const unsigned char *)var->val.str.ptr, var->val.str.len, false);
+        /* Password escapes must be unambiguous: a literal "\\x0A" differs
+         * from a newline, including when Info groups values by their text. */
+        return text_bytes((const unsigned char *)var->val.str.ptr, var->val.str.len,
+                          false, id == XX_META_ID_PASSWORD);
     case XX_VAR_TYPE_WSTRING: case XX_VAR_TYPE_WSTRING_VIEW: {
         size_t i, used = 0;
         char *joined = copy_string("");
@@ -129,7 +134,8 @@ static char *variant_text(const xx_var *var, uint32_t id) {
             if (!segment) { free(joined); return NULL; }
             memcpy(segment, var->val.wstr.ptr + start, length * sizeof(*segment)); segment[length] = 0;
             utf8 = xx_str_unicode_to_utf8(segment); free(segment);
-            escaped = utf8 ? text_bytes((const unsigned char *)utf8, strlen(utf8), false) : NULL;
+            escaped = utf8 ? text_bytes((const unsigned char *)utf8, strlen(utf8),
+                                       false, id == XX_META_ID_PASSWORD) : NULL;
             xx_str_free(utf8);
             if (!escaped) { free(joined); return NULL; }
             length = strlen(escaped);
@@ -143,7 +149,7 @@ static char *variant_text(const xx_var *var, uint32_t id) {
         return joined;
     }
     case XX_VAR_TYPE_BYTES: case XX_VAR_TYPE_BYTES_VIEW:
-        return text_bytes(var->val.bytes.data, var->val.bytes.size, true);
+        return text_bytes(var->val.bytes.data, var->val.bytes.size, true, false);
     case XX_VAR_TYPE_BOOL: return copy_string(var->val.b ? "Yes" : "No");
     case XX_VAR_TYPE_FLOAT: snprintf(text, sizeof(text), "%.9g", (double)var->val.f); break;
     case XX_VAR_TYPE_DOUBLE: snprintf(text, sizeof(text), "%.17g", var->val.d); break;

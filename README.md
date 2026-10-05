@@ -18,6 +18,48 @@ desktop widget and compact `XXWIDGETS_ARCHIVEVIEW` terminal view. The applicatio
 use Qt or C++. On macOS, the native xxwidgets backend uses its existing
 private AppKit bridge in Objective-C.
 
+HxC disk images have additional native container/track readers and explicit raw
+geometry profiles. Use `xfu --raw-profiles` to list geometries and
+`xfu x disk.img --reader hxc-raw:DOS_DD_720KB -orecovered` to select one.
+`--reader` also selects validated named readers for listing and testing.
+The [HxC format documentation](docs/HXC_FORMATS.md) records sector/track/flux
+extraction scope, XML initialization semantics and compatibility limits.
+
+The Universal Extractor 2 expansion adds native Chromium DataPack, Windows
+thumbnail-cache, Enigma, BitRock, Smart Install Maker and MoleBox payload readers;
+gettext/Qt catalogs, MIME messages,
+Windows Help streams, SQLite SQL export and Microsoft Reader books; new game
+resource readers; and decoded multimedia and PDF outputs. The Windows x64
+bundle includes separate bounded helpers for 7-Zip, FFmpeg, PDFium, GARbro,
+ConvertLIT, UPX and archive codecs, with their runtime dependencies and notices.
+TEST sends decoded bytes to memory and quiet console testing reports percentages;
+`--verbose` reports each member's result.
+
+Additional readers unpack ExcelsiorII1 installers, classic/current SuperDAT LH1
+packages, FEAD packages using the verified Adobe Reader 7.0 layout, UHARC 0.6
+archives and DGCA 1.10 archives. FEAD restores cabinet members beneath each
+container's directory name and labels preserved carrier bytes explicitly;
+other optimizer layouts are rejected.
+UHARC uses a bounded Windows RAM I/O bridge with the redistributable original
+UnUHARC 0.6b, subject to its version, licensing and resource limits.
+DGCA uses an independent native reader for stored, solid, non-solid and password
+archives, including validated IARC versions 001/990/a90 and Unicode names and
+passwords. Listing and TEST use borrowed
+source IO and RAM only; no external DGCA executable is required. The decoder
+cache/workspace limit defaults to 256 MiB; record-state metadata and extraction
+buffers are separate. Inventory is capped at 65,535 members; caller decoder
+memory/member limits and cancellation apply. Recovery archives, split volumes,
+key files and other unverified variants
+remain unsupported.
+
+The installed `share/doc/xfileunpacker/UNIVERSAL_EXTRACTOR_FORMATS.md` and
+`uniextract2-coverage.json` account for all 124 named families in the UE2 list.
+Each row states available payload actions and missing variants. Recognized types
+and registered handlers do not imply complete extraction or writing support.
+`--reader garbro` or `--reader garbro:TAG` selects the game engine explicitly;
+automatic fallback uses catalog signatures and extensions. Magicless game files
+renamed to an unrelated suffix may need explicit reader selection.
+
 The GUI and TUI have a **File type** combobox populated from the detected
 format chain. A `sample.tar.gz` file offers `Binary`, `gzip`, and `tar.gz`,
 with `tar.gz` selected automatically. Selecting `gzip` shows the contained
@@ -30,8 +72,8 @@ Detection starts with xxfclib's separate extension-first fast detector,
 file reads or reader construction and handles case and compound suffixes such
 as `.tar.gz`. XFileUnpacker validates and parses the suggested reader before
 accepting it. Unknown or ambiguous suffixes, and rejected extension hints, use
-the existing content detector, `xx_format_get_file_type_device()`, which remains
-available unchanged. Thus a valid `.gz` stream opens as gzip first, while a
+the content detector, `xx_format_get_file_type_device()`. Thus a valid `.gz`
+stream opens as gzip first, while a
 renamed file can still be recognized by content. If content remains Binary,
 the existing validated extension fallback also tries signatureless formats.
 
@@ -43,6 +85,64 @@ compressed entries with name trailers. Gzip payloads in packed executable
 carriers retain full DEFLATE, CRC and size validation. A damaged DMS image can
 expose later independently verified tracks while its complete-image extraction
 continues to report failure.
+
+Additional legacy readers handle AIX BFF file records and symlink extents,
+IVT directory trees, indexed QIP generation 1 records, Infogrames resources with bounded gaps, FLS
+attributes, GST signatures, Second Nature absent-resource sentinels, and
+relative DOS paths in Corelltec and POVLAB members. Older Makeself wrappers,
+signed GPInstall carriers, InstallUs PE payloads, and FlashJester 1.01 retain
+their payload size and checksum checks. On Windows, long output paths use
+absolute extended paths, including atomic staging and replacement; directory
+creation continues to reject reparse points in every ancestor.
+VMS SaveSet readers accept volume and FID metadata records, documented
+header-only reserved files, and NOBACKUP omissions. Missing ordinary file bodies
+and partial bodies still report failure. HFE Amiga MFM tracks are decoded into
+ADF images with sector header/data checksums; recovered prefixes use
+`image.partial.adf` and return an incomplete status when tracks are unavailable.
+INFTool self-extractors expose their validated CAB payloads, including their
+historical size-dependent byte mask, and older ZIP local-record payloads ending
+in RSFX. ZIP directory reconstruction preserves the encrypted member bytes and
+forwards the supplied password. Installer code is never run.
+
+The command line accepts `-p<password>` for extraction, listing and testing.
+Use `--password-env=<name>` to read a password from an environment variable;
+the value is not printed or added to the child command line. ZIP passwords are
+forwarded through self-extracting wrappers, and decoded members retain their
+size and CRC checks. Encryption support depends on the selected reader;
+native ACE decryption is currently unavailable.
+
+Active Delivery (SFX AD01) recovers its embedded passwords and validates all
+members before exposing them as per-file `Password` metadata. Its two password
+groups remain distinct; the metadata also preserves the original encryption
+status and compression method. `xfu l installer.exe --advanced` displays them.
+Listing, testing and extracting these installers work without `-p` or
+`--password-env`: the reader uses the embedded password for each member.
+Demolition-FX ZIP self-extractors also recover passwords from recognized
+producer imports and code references. Each member is decoded with full size
+and CRC checks before its recovered password is exposed as metadata. These
+files can be opened and extracted without password options; an explicit
+password remains an override for their ZIP reader.
+
+Use `xfu --get-password installer.exe` (or `xfu p installer.exe`) to retrieve
+verified embedded passwords without extracting files. The command reports
+each distinct password and its member count. It returns `1` when no embedded
+password is available; passwords supplied with `-p` are never reported as
+recovered credentials. `xfu l installer.exe --get-password` produces the same
+report. Control bytes and invalid UTF-8 bytes appear as `\xHH`, and literal
+backslashes as `\\`, so the report preserves the recovered credential.
+
+```powershell
+xfu x archive.zip -ooutput --password-env=ARCHIVE_PASSWORD
+xfu t archive.zip -pmy-password
+```
+
+`tools/research_password_archives.py` inspects the classified password archives
+and checks a bounded set of local hints. A matching encryption header is only a
+candidate: complete member decoding and CRC validation are required before a
+password is reported as recovered. `tools/verify_password_recoveries.py` verifies
+every native extracted member against its archive size and CRC and records
+SHA-256 hashes. `tools/research_ace_password.py` can independently check ACE
+candidates using a separately supplied upstream `acefile.py`.
 
 For a repeatable corpus audit, `tools/verify_arc_corpus.py` selects the smallest
 direct file in every nonempty subfolder, recursively. It keeps extraction logs,
@@ -56,12 +156,49 @@ python tools/verify_arc_corpus.py --root F:\ARC\ARC1_err `
 ```
 
 Use `--replay <earlier-report.json>` to repeat the exact sample selection.
+Add `--snapshot` to keep input copies in the report directory, and `--relocate`
+to resolve moved replay inputs by unique filename and size. An interrupted run
+can continue with `--resume` and the same report directory and unpacker binary;
+completed results are kept and remaining samples use their saved snapshots.
 Timeouts, failed extractions and successful empty archives have separate statuses.
 The offline `xfileunpacker_probe_readers` build target can validate named readers
 against a sample when investigating a detection or parser failure.
 
+To inspect every file and copy only categories supported by evidence, build
+`xfileunpacker_probe_metadata` and run the all-file tools:
+
+```powershell
+cmake --build build --config Release --target xfileunpacker_probe_metadata
+python tools/inventory_all_arc.py --root F:\ARC\ARC1_err --report-dir build/arc-all-audit
+python tools/scan_all_arc_files.py --report-dir build/arc-all-audit `
+  --unpacker build/Release/xfu.exe --probe build/Release/xfileunpacker_probe_metadata.exe `
+  --research <research-report.json> --jobs 8
+python tools/verify_all_arc_scan.py --report-dir build/arc-all-audit
+```
+
+The inventory reads and hashes every original file. The scanner creates
+`corrupted`, `new file format`, and `password` under the input folder, preserving
+each original relative path and verifying every copy's SHA-256 independently.
+These output folders are excluded from later inventories. Originals remain in
+place. A reader failure alone does not establish damage: unresolved layouts,
+possible missing split volumes, and resource limits remain uncategorized in
+`report.csv` and `report.json`. The research report supplies earlier findings
+only for identical SHA-256 contents. Use `--resume` after an interrupted scan.
+
+Metadata probing can decode audited readers without creating extracted files.
+Its JSON reports the integrity contract and limitations: ZIP and GST check
+CRC32; IVT and Silmarils check framing and size; LHA checks decoded size and
+payload CRC16. A passing test therefore means
+the selected reader completed the checks it implements. Other readers use the
+native archive test in isolated temporary folders, with time, memory, and output
+limits. Inputs are never executed. The final verifier independently checks every
+original and categorized copy against the inventory and reports missing or
+unexpected output files.
+
 `xfu --formats` (or `xfu i`) lists every file type in xxfclib's format catalog.
 A compact grouped catalog is in [docs/CURRENT.md](docs/CURRENT.md).
+The catalog includes new archive, disk, filesystem and partition readers.
+Extraction capabilities depend on required profiles and available helpers.
 Terminal output uses colors automatically; `--color=always` or `--color=never`
 overrides this, and `NO_COLOR` disables automatic colors. Redirected output is
 plain text by default. The GUI's **Help → Supported file types...** menu opens
@@ -209,7 +346,8 @@ has been changed.
 ```text
 xfu x <archive> [-o<dir>]     Extract with full paths
 xfu l <archive> [--advanced]  List contents, optionally with all metadata
-xfu t <archive>               Test by extracting into a temporary directory
+xfu t <archive> [--verbose]  Test in memory; percentage or member results
+xfu p <archive>               Retrieve verified embedded passwords
 xfu a <archive> <file>...     Add files to a new archive
 ```
 
@@ -229,14 +367,39 @@ member's type, sizes, modified time, attributes, and every available reader
 property beneath its normal listing row. Missing values are shown as `unknown`.
 With no arguments, `--help`, or `-h`, the application prints help.
 
-The `t` command actually decodes data into a unique temporary directory and
-removes that directory afterward. The original sample left a fixed
-`xxfc_unpack_test_tmp` directory behind. There is no `e` command because the
-library's extraction API preserves stored paths.
+The `t` command verifies members in memory without creating extracted files.
+By default it prints only aggregate percentage progress. Add `--verbose` or
+`-v` after the archive path to show each member's `OK` or `FAILED` result
+instead. Errors go to stderr, and a failed test returns a nonzero exit code.
+There is no `e` command because the library's extraction API preserves stored
+paths.
 
 The `a` command creates an archive and replaces an existing archive of a
-supported format. Writable formats are `.tar`, `.tar.gz` / `.tgz`, `.tar.bz2`
-/ `.tbz2`, `.tar.xz` / `.txz`, `.tar.zst`, `.tar.lz4`, `.zip`, and `.cpio`.
+supported format. Writable formats are `.7z`, `.zip`, `.tar`, `.gz`, `.bz2`,
+`.xz`, `.wim`, `.tar.gz` / `.tgz`, `.tar.bz2` / `.tbz2`, `.tar.xz` / `.txz`,
+`.tar.zst`, `.tar.lz4`, and `.cpio`. Raw GZIP, BZIP2 and XZ streams require one
+input file. The password control and `-p` also protect newly created 7z/ZIP archives.
+WIM creation defaults to XPRESS compression. Select `--compression=stored`,
+`--compression=xpress`, `--compression=lzx` or `--compression=lzms`; optional
+`--compression-level=0..100` uses the compressor default at zero. GUI/TUI users
+select the method and level in **WIM create** controls before adding files.
+XPRESS/LZX produce WIM 1.13 and LZMS produces non-solid WIM 0.14. The separate
+wimlib compression runtime
+uses RAM chunks without temporary files. Stored creation and native reading
+work without that runtime; unavailable compression fails before an existing
+destination is truncated. These compression switches are console options;
+GUI/TUI startup uses their controls.
+The bundled Windows x64 7-Zip engine
+provides all 60 readers in 7-Zip 26.03. Use `--reader sevenzip` for automatic
+engine selection, including embedded SFX archives, or select a named handler such
+as `--reader sevenzip_apfs`. `--reader sevenzip_pe`, `sevenzip_elf` and
+`sevenzip_macho` expose executable sections. Native readers stay available.
+Automatic fallback stays with the detected or requested container and requires
+the archive at its start. Failed installer validation remains a failure; fallback
+does not scan for an inner archive or expose the executable carrier's sections.
+The seven upstream writable formats are all enabled;
+upstream read-only disk/filesystem and archive handlers remain read-only.
+
 xxfclib determines which formats can be read and the limitations of each
 reader.
 
@@ -252,11 +415,35 @@ archive onto the window. Double-click a folder or press Enter to enter it;
 The table shows names, sizes, packed sizes, modification dates, and stored
 attributes when the archive format provides them. Unknown values remain blank.
 
+Both the GUI and TUI have an editable **Password** field for listing, testing
+and extraction. A successfully opened archive autofills it when its reader
+recovers an embedded password. Selecting a member shows that member's password
+group. Manual edits are passed literally to the reader and take precedence
+over autofill. Autofill keeps the reader's per-member recovery active, so files
+with different embedded password groups can be extracted together.
+Automatically filled values are cleared when switching archives.
+Passwords are kept for the current session and are not saved in preferences.
+
+Select **Get password** beside the field to retrieve the selected member's
+embedded password, or the first recovered password when no member is selected.
+This action reads the current archive again and replaces a manual override only
+when recovery succeeds. If no password is found, the field retains its current
+value and the status explains the result. Retrieving a password restores
+automatic handling of archives with different password groups.
+
+An embedded password containing control bytes appears under **Password
+(escaped)**: `\\` represents a backslash and `\xHH` a control byte. Operations
+use the original recovered value. Editing the field switches to literal input.
+
 The **Advanced** checkbox adds columns for every property supplied by the
 reader, plus record header/data offsets and sizes. It also shows a scrollable
 details list for the selected member. ZIP entries include decoded method/level
 and host OS alongside CRC32, flags, versions, encryption, comments and complete
 extra-field bytes. **Info** opens a resizable dialog with selectable text.
+Recovered passwords appear in **Info** even when Advanced is disabled. With
+no member selected, Info lists the available passwords and their member counts.
+In password display text, `\\` represents a literal backslash and `\xHH`
+represents a control byte; the stored metadata retains the original value.
 Inferred folders have no stored record metadata.
 
 **Tools > Options...** opens xxwidgets' modal application options dialog with

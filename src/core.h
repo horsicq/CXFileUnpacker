@@ -33,6 +33,11 @@ typedef struct xfu_entry {
     char attributes[24]; /* Format attributes as hexadecimal, or empty. */
     const xfu_property *properties; /* All reader metadata and record fields. */
     size_t property_count;
+    /* Optional raw NUL-terminated credential bytes recovered and validated
+     * by the reader; this field can contain control or non-UTF-8 bytes.
+     * Borrowed only during the entry callback; callers must copy to retain it.
+     * NULL means no recovered credential, independently of caller passwords. */
+    const char *embedded_password;
 } xfu_entry;
 
 typedef struct xfu_callbacks {
@@ -47,6 +52,13 @@ typedef struct xfu_callbacks {
      * Called before parsing; the array is borrowed for this call. */
     void (*file_types)(void *user, const xx_file_type_t *types, size_t count,
                        xx_file_type_t selected);
+    /* TEST only: the result of decoding/verifying one member in memory.
+     * Arguments are borrowed for this call. Cancelled members are failures. */
+    void (*test_result)(void *user, const xfu_entry *entry, bool success);
+    /* TEST only: monotonic whole-archive percentage (0..100). Reaches 100
+     * after all members have been processed, including failed members;
+     * cancellation and premature iterator failure do not reach 100. */
+    void (*test_progress)(void *user, unsigned percent);
 } xfu_callbacks;
 
 typedef struct xfu_request {
@@ -68,6 +80,15 @@ typedef struct xfu_request {
      * interpretation from the detected chain; BINARY cannot open an archive.
      * ADD still chooses its writer from the destination extension. */
     xx_file_type_t file_type;
+    /* Optional UTF-8 password, borrowed for the duration of xfu_run(). */
+    const char *password;
+    /* Optional explicit reader factory name, including hxc-raw:PROFILE.
+     * Its grammar is still validated. Cannot combine with file_type. */
+    const char *reader_name;
+    /* ADD/WIM only: stored, xpress (default), lzx or lzms. */
+    const char *compression_method;
+    int compression_level; /* wimlib level 0..100; zero selects its default. */
+    bool compression_level_set;
 } xfu_request;
 
 xfu_command xfu_parse_command(const char *text);

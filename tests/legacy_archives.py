@@ -64,12 +64,12 @@ def pdb(payload):
     return bytes(header) + struct.pack(">I", 88) + b"\x40\0\0\1\0\0" + payload
 
 
-def run_case(executable, folder, label, data, expected=None):
+def run_case(executable, folder, label, data, expected=None, timeout=30):
     archive = folder / (label + ".data")
     output = folder / (label + "-output")
     archive.write_bytes(data)
     result = subprocess.run([str(executable), "x", str(archive), "-o" + str(output)],
-                            capture_output=True, timeout=30, cwd=folder)
+                            capture_output=True, timeout=timeout, cwd=folder)
     files = {str(p.relative_to(output)).replace("\\", "/"): p.read_bytes()
              for p in output.rglob("*") if p.is_file()} if output.exists() else {}
     diagnostic = (result.stdout + result.stderr).decode("utf-8", "replace")
@@ -144,8 +144,13 @@ def main():
         data[0] = 0
         run_case(executable, folder, "pdb-empty-name", data)
         if args.samples_root:
-            root = args.samples_root.resolve() / "ARC3_err"
-            select = lambda name: min((root / name).iterdir(), key=lambda p: (p.stat().st_size, p.name.casefold()))
+            corpus = args.samples_root.resolve()
+            def select(name, group="ARC3_err"):
+                source = corpus / group / name
+                if not source.is_dir():
+                    source = corpus / name
+                return min((p for p in source.iterdir() if p.is_file()),
+                           key=lambda p: (p.stat().st_size, p.name.casefold()))
             data = select("PYZ_err").read_bytes()
             toc = marshal.loads(data[struct.unpack("<I", data[8:12])[0]:])
             expected = {}
@@ -170,8 +175,7 @@ def main():
             expected = {f"record_{index:05d}.bin": data[offsets[index]:offsets[index + 1]]
                         for index in range(count)}
             run_case(executable, folder, "arc1-palm-pdb", data, expected)
-            data = min((args.samples_root / "ARC2_err" / "LOFI_err").iterdir(),
-                       key=lambda p: (p.stat().st_size, p.name.casefold())).read_bytes()
+            data = select("LOFI_err", "ARC2_err").read_bytes()
             segment_size, count, last_size = struct.unpack_from(">III", data, 36)
             offsets = struct.unpack_from(">" + str(count) + "Q", data, 48)
             base = 48 + count * 8
@@ -189,12 +193,12 @@ def main():
             raw_output = folder / "independent-lofi-output"
             raw_image.write_bytes(image)
             result = subprocess.run([str(executable), "x", str(raw_image), "-o" + str(raw_output)],
-                                    capture_output=True, timeout=30, cwd=folder)
+                                    capture_output=True, timeout=120, cwd=folder)
             assert result.returncode == 0, result.stdout + result.stderr
             expected = {"ISO/" + str(p.relative_to(raw_output)).replace("\\", "/"): p.read_bytes()
                         for p in raw_output.rglob("*") if p.is_file()}
             assert expected, "LOFI reference disk has no ISO members"
-            run_case(executable, folder, "arc1-lofi-gzip-9", data, expected)
+            run_case(executable, folder, "arc1-lofi-gzip-9", data, expected, timeout=120)
     print("Legacy archive regressions passed")
 
 

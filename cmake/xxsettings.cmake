@@ -12,6 +12,7 @@ set(XXSETTINGS_SOURCES
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/xx_rt.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/xx_rt_fp.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/xx_rt_math.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/io/xx_io_memory_only.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/memory/xx_memory.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/memory/xx_memory_rt.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/memory/platforms/xx_memory_sse2.c

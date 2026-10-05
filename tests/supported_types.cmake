@@ -6,7 +6,9 @@ string(ASCII 27 escape)
 if(plain MATCHES "${escape}")
     message(FATAL_ERROR "Redirected auto output must be plain text")
 endif()
-foreach(name IN ITEMS BINARY ZIP TAR.GZ PE64 CPX4 "Xamarin compressed assembly")
+foreach(name IN ITEMS BINARY ZIP TAR.GZ PE64 CPX4 "Xamarin compressed assembly"
+        "BitRock CookFS installer" "Smart Install Maker" "UPX packed executable"
+        "MoleBox SVFS package")
     if(NOT plain MATCHES "${name}")
         message(FATAL_ERROR "Missing format: ${name}")
     endif()

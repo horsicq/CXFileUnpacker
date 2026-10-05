@@ -13,6 +13,12 @@ file(GLOB_RECURSE XXFORMATS_SOURCES CONFIGURE_DEPENDS
 # DIE music readers require the separate signature engine and its runtime.
 list(FILTER XXFORMATS_SOURCES EXCLUDE REGEX "/src/formats/die_music/")
 list(APPEND XXFORMATS_SOURCES
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/nsis/nsis_bzip2.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/fead/encoder/deflate.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/fead/encoder/trees.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/fead/encoder/adler32.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/fead/encoder/crc32.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/fead/encoder/compress.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/xx_rt.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/xx_rt_fp.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/xx_rt_math.c
@@ -24,6 +30,7 @@ list(APPEND XXFORMATS_SOURCES
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/io/xx_io.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/io/xx_io_file.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/io/xx_io_mem.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/io/xx_io_memory_only.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/io/xx_io_sub.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/io/xx_io_process.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/memory/xx_memory.c

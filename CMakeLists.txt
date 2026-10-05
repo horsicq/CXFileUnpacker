@@ -54,6 +54,7 @@ endif()
 
 add_library(xfileunpacker_core STATIC
     src/core.c src/core.h src/metadata.c src/metadata.h
+    src/information.c src/information.h
     src/supported_types.c src/supported_types.h
     "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack/xxfc_readers.c")
 target_include_directories(xfileunpacker_core PUBLIC src PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
@@ -78,10 +79,17 @@ endif()
 xfu_c_target(XFileUnpacker)
 
 # Offline tool for investigating detection and reader coverage on real corpora.
-# add_executable(xfileunpacker_probe_readers EXCLUDE_FROM_ALL tools/probe_readers.c)
-# target_include_directories(xfileunpacker_probe_readers PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
-# target_link_libraries(xfileunpacker_probe_readers PRIVATE xfileunpacker_core)
-# xfu_c_target(xfileunpacker_probe_readers)
+add_executable(xfileunpacker_probe_readers EXCLUDE_FROM_ALL tools/probe_readers.c)
+target_include_directories(xfileunpacker_probe_readers PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
+target_link_libraries(xfileunpacker_probe_readers PRIVATE xfileunpacker_core)
+xfu_c_target(xfileunpacker_probe_readers)
+add_executable(xfileunpacker_probe_metadata EXCLUDE_FROM_ALL tools/probe_metadata.c)
+target_include_directories(xfileunpacker_probe_metadata PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
+target_link_libraries(xfileunpacker_probe_metadata PRIVATE xfileunpacker_core)
+if(WIN32)
+    target_link_libraries(xfileunpacker_probe_metadata PRIVATE shell32)
+endif()
+xfu_c_target(xfileunpacker_probe_metadata)
 
 if(XFILEUNPACKER_BUILD_GUI OR XFILEUNPACKER_BUILD_TUI)
     if(NOT TARGET xxwidgets::xxwidgets)
@@ -145,16 +153,67 @@ if(XFILEUNPACKER_BUILD_GUI OR XFILEUNPACKER_BUILD_TUI)
 endif()
 
 include(packaging/icons.cmake)
+include(cmake/format_additions.cmake)
 
 if(BUILD_TESTING)
+    add_executable(xfileunpacker_archive_test_memory tests/archive_test_memory.c)
+    target_link_libraries(xfileunpacker_archive_test_memory PRIVATE xfileunpacker_core)
+    xfu_c_target(xfileunpacker_archive_test_memory)
+    add_executable(xfileunpacker_hxc_track_lifecycle tests/hxc_track_lifecycle.c)
+    target_link_libraries(xfileunpacker_hxc_track_lifecycle PRIVATE xxfclib::xxformats)
+    xfu_c_target(xfileunpacker_hxc_track_lifecycle)
+    add_executable(xfileunpacker_hxc_sector_lifecycle tests/hxc_sector_lifecycle.c)
+    target_link_libraries(xfileunpacker_hxc_sector_lifecycle PRIVATE xxfclib::xxformats)
+    xfu_c_target(xfileunpacker_hxc_sector_lifecycle)
+    add_executable(xfileunpacker_hxc_layout_lifecycle tests/hxc_layout_lifecycle.c)
+    target_include_directories(xfileunpacker_hxc_layout_lifecycle PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
+    target_link_libraries(xfileunpacker_hxc_layout_lifecycle PRIVATE xfileunpacker_core)
+    xfu_c_target(xfileunpacker_hxc_layout_lifecycle)
+    add_test(NAME hxc_layout_lifecycle COMMAND xfileunpacker_hxc_layout_lifecycle)
+    set_tests_properties(hxc_layout_lifecycle PROPERTIES TIMEOUT 60)
+    add_executable(xfileunpacker_ad01_password_metadata tests/ad01_password_metadata.c)
+    target_link_libraries(xfileunpacker_ad01_password_metadata PRIVATE xfileunpacker_core)
+    xfu_c_target(xfileunpacker_ad01_password_metadata)
+    add_executable(xfileunpacker_core_embedded_password tests/core_embedded_password.c)
+    target_link_libraries(xfileunpacker_core_embedded_password PRIVATE xfileunpacker_core)
+    xfu_c_target(xfileunpacker_core_embedded_password)
+    add_executable(xfileunpacker_demolition_password_lifecycle tests/demolition_password_lifecycle.c)
+    target_link_libraries(xfileunpacker_demolition_password_lifecycle PRIVATE xxfclib::xxformats)
+    xfu_c_target(xfileunpacker_demolition_password_lifecycle)
+    set_target_properties(xfileunpacker_probe_readers PROPERTIES EXCLUDE_FROM_ALL FALSE)
     find_package(Threads REQUIRED)
+    target_link_libraries(xfileunpacker_archive_test_memory PRIVATE Threads::Threads)
     add_executable(xfileunpacker_sfx_gzip_tests tests/sfx_gzip.c)
     target_link_libraries(xfileunpacker_sfx_gzip_tests PRIVATE xfileunpacker_core)
     xfu_c_target(xfileunpacker_sfx_gzip_tests)
     add_test(NAME sfx_gzip_carriers COMMAND xfileunpacker_sfx_gzip_tests)
     set_tests_properties(sfx_gzip_carriers PROPERTIES TIMEOUT 20)
+    add_executable(xfileunpacker_inftool_password_lifecycle tests/inftool_password_lifecycle.c)
+    target_link_libraries(xfileunpacker_inftool_password_lifecycle PRIVATE xxfclib::xxformats)
+    xfu_c_target(xfileunpacker_inftool_password_lifecycle)
+    add_executable(xfileunpacker_hfe_cancellation_tests tests/hfe_cancellation.c)
+    target_link_libraries(xfileunpacker_hfe_cancellation_tests PRIVATE xfileunpacker_core)
+    xfu_c_target(xfileunpacker_hfe_cancellation_tests)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME archive_test_memory COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/archive_test_memory.py"
+            "$<TARGET_FILE:XFileUnpacker>" --probe "$<TARGET_FILE:xfileunpacker_archive_test_memory>")
+        set_tests_properties(archive_test_memory PROPERTIES TIMEOUT 120)
+        add_test(NAME hxc_track_formats COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/hxc_track_formats.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>" --probe "$<TARGET_FILE:xfileunpacker_probe_readers>"
+            --lifecycle-probe "$<TARGET_FILE:xfileunpacker_hxc_track_lifecycle>")
+        add_test(NAME hxc_sector_formats COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/hxc_sector_formats.py"
+            --helper "$<TARGET_FILE:xfileunpacker_hxc_sector_lifecycle>")
+        add_test(NAME hxc_coverage COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/hxc_coverage.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>" --library "${XFILEUNPACKER_XXFCLIB_DIR}")
+        add_test(NAME hxc_layout_formats COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/hxc_layout_formats.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>")
+        set_tests_properties(hxc_track_formats hxc_sector_formats hxc_coverage hxc_layout_formats PROPERTIES TIMEOUT 300)
         add_test(NAME binhex_layout COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/binhex_layout.py" "$<TARGET_FILE:XFileUnpacker>")
         add_test(NAME legacy_archives COMMAND "${Python3_EXECUTABLE}"
@@ -162,6 +221,70 @@ if(BUILD_TESTING)
         add_test(NAME reader_compatibility COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/reader_compatibility.py" "$<TARGET_FILE:XFileUnpacker>")
         set_tests_properties(binhex_layout legacy_archives reader_compatibility PROPERTIES TIMEOUT 60)
+        add_test(NAME makeself_legacy COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/makeself_legacy_regression.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>" --probe "$<TARGET_FILE:xfileunpacker_probe_readers>")
+        add_test(NAME sfx_spis_pe COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/sfx_spis_pe_regression.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>" --probe "$<TARGET_FILE:xfileunpacker_probe_readers>")
+        add_test(NAME flashjester_legacy COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/flashjester_legacy_regression.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>" --probe "$<TARGET_FILE:xfileunpacker_probe_readers>")
+        add_test(NAME format_research COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/format_research_regressions.py" "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME corelltec_paths COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/corelltec_paths.py" "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME vmssaveset_metadata COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/vmssaveset_metadata_regression.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>" --probe "$<TARGET_FILE:xfileunpacker_probe_readers>")
+        add_test(NAME hfe_amiga COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/hfe_amiga.py" "$<TARGET_FILE:XFileUnpacker>"
+            --probe "$<TARGET_FILE:xfileunpacker_probe_readers>"
+            --cancellation-probe "$<TARGET_FILE:xfileunpacker_hfe_cancellation_tests>")
+        add_test(NAME password_options COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/password_options.py" "$<TARGET_FILE:XFileUnpacker>")
+        set(_xfu_password_retrieval_args --unpacker "$<TARGET_FILE:XFileUnpacker>")
+        if(WIN32 AND TARGET XFileUnpackerGUI)
+            list(APPEND _xfu_password_retrieval_args --gui "$<TARGET_FILE:XFileUnpackerGUI>")
+        endif()
+        if(WIN32 AND TARGET XFileUnpackerTUI)
+            list(APPEND _xfu_password_retrieval_args --tui "$<TARGET_FILE:XFileUnpackerTUI>")
+        endif()
+        add_test(NAME password_retrieval COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/password_retrieval_regression.py" ${_xfu_password_retrieval_args})
+        set_tests_properties(password_retrieval PROPERTIES TIMEOUT 120)
+        add_test(NAME ad01_encryption COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ad01_encryption_regression.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>" --probe "$<TARGET_FILE:xfileunpacker_probe_readers>"
+            --metadata-probe "$<TARGET_FILE:xfileunpacker_ad01_password_metadata>")
+        set(_xfu_demolition_args
+            --unpacker "$<TARGET_FILE:XFileUnpacker>"
+            --probe "$<TARGET_FILE:xfileunpacker_probe_readers>"
+            --lifecycle-probe "$<TARGET_FILE:xfileunpacker_demolition_password_lifecycle>")
+        if(WIN32 AND TARGET XFileUnpackerGUI)
+            list(APPEND _xfu_demolition_args --gui "$<TARGET_FILE:XFileUnpackerGUI>")
+        endif()
+        if(WIN32 AND TARGET XFileUnpackerTUI)
+            list(APPEND _xfu_demolition_args --tui "$<TARGET_FILE:XFileUnpackerTUI>")
+        endif()
+        add_test(NAME demolition_password COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/demolition_password_regression.py" ${_xfu_demolition_args})
+        set_tests_properties(demolition_password PROPERTIES TIMEOUT 120)
+        add_test(NAME inftool_regression COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/inftool_regression.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>" --probe "$<TARGET_FILE:xfileunpacker_probe_readers>")
+        add_test(NAME inftool_legacy_zip COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/inftool_legacy_zip_regression.py"
+            --unpacker "$<TARGET_FILE:XFileUnpacker>" --probe "$<TARGET_FILE:xfileunpacker_probe_readers>"
+            --lifecycle-probe "$<TARGET_FILE:xfileunpacker_inftool_password_lifecycle>")
+        if(WIN32)
+            add_test(NAME windows_long_paths COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/windows_long_paths.py" "$<TARGET_FILE:XFileUnpacker>")
+            set_tests_properties(windows_long_paths PROPERTIES TIMEOUT 120)
+        endif()
+        set_tests_properties(makeself_legacy sfx_spis_pe flashjester_legacy
+            format_research corelltec_paths vmssaveset_metadata hfe_amiga password_options ad01_encryption
+            inftool_regression inftool_legacy_zip PROPERTIES TIMEOUT 120)
     endif()
     add_executable(xfileunpacker_progress_tests tests/progress_observer.c)
     target_link_libraries(xfileunpacker_progress_tests PRIVATE xfileunpacker_core Threads::Threads)
@@ -182,6 +305,11 @@ if(BUILD_TESTING)
     add_test(NAME record_metadata COMMAND xfileunpacker_metadata_tests)
     set_tests_properties(record_metadata PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/metadata" TIMEOUT 30)
+    add_executable(xfileunpacker_information_tests tests/information.c)
+    target_link_libraries(xfileunpacker_information_tests PRIVATE xfileunpacker_core)
+    xfu_c_target(xfileunpacker_information_tests)
+    add_test(NAME information COMMAND xfileunpacker_information_tests)
+    set_tests_properties(information PROPERTIES TIMEOUT 30)
     add_executable(xfileunpacker_selection_tests tests/selection_extract.c)
     target_link_libraries(xfileunpacker_selection_tests PRIVATE xfileunpacker_core)
     xfu_c_target(xfileunpacker_selection_tests)
@@ -205,7 +333,8 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tests/fast-detection" TIMEOUT 30)
     foreach(widget_test IN ITEMS xxwidgets_core_tests xxwidgets_win32_tests
                                  xxwidgets_scan_options_tests xxwidgets_font_options_tests
-                                 xxwidgets_context_options_tests xxwidgets_tui_tests)
+                                 xxwidgets_context_options_tests xxwidgets_optimization_options_tests
+                                 xxwidgets_tui_tests)
         if(TARGET ${widget_test})
             list(APPEND _xfu_widget_tests ${widget_test})
         endif()
@@ -230,6 +359,19 @@ if(BUILD_TESTING)
         add_test(NAME tui_smoke COMMAND XFileUnpackerTUI --smoke-test)
         set_tests_properties(tui_smoke PROPERTIES TIMEOUT 30)
     endif()
+    if(WIN32 AND Python3_Interpreter_FOUND AND (TARGET XFileUnpackerGUI OR TARGET XFileUnpackerTUI))
+        set(_xfu_password_args
+            --callback-probe "$<TARGET_FILE:xfileunpacker_core_embedded_password>")
+        if(TARGET XFileUnpackerGUI)
+            list(APPEND _xfu_password_args --gui "$<TARGET_FILE:XFileUnpackerGUI>")
+        endif()
+        if(TARGET XFileUnpackerTUI)
+            list(APPEND _xfu_password_args --tui "$<TARGET_FILE:XFileUnpackerTUI>")
+        endif()
+        add_test(NAME ui_password COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_password_regression.py" ${_xfu_password_args})
+        set_tests_properties(ui_password PROPERTIES TIMEOUT 120)
+    endif()
     if(TARGET XFileUnpackerGUI AND WIN32)
         set(_xfu_progress_args "-DGUI=$<TARGET_FILE:XFileUnpackerGUI>"
             "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/tests/threaded-progress")
@@ -253,6 +395,10 @@ if(BUILD_TESTING)
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/roundtrip.cmake")
     set_tests_properties(console_roundtrip PROPERTIES TIMEOUT 120)
 endif()
+
+include(cmake/sevenzip_formats.cmake)
+include(cmake/uniextract_formats.cmake)
+include(cmake/wim_legacy_formats.cmake)
 
 install(TARGETS XFileUnpacker RUNTIME DESTINATION bin)
 install(FILES README.md LICENSE DESTINATION share/doc/XFileUnpacker)

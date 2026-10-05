@@ -28,6 +28,9 @@ int main(void)
         previous = type;
     }
     for (i = 1; i <= (size_t)previous; ++i) {
+        /* This application links the formats-only library. Music IDs remain
+         * ABI-stable below the newly added HxC IDs, but are not enabled here. */
+        if (i >= 1600U && i <= (size_t)XX_FILE_TYPE_DIE_MUSIC_YM3812OPL2REGLOG) continue;
         if (!strcmp(xx_format_file_type_to_string((xx_file_type_t)i), "UNKNOWN")) continue;
         CHECK(matched < count && *(const xx_file_type_t *)xx_list_at(first, matched) == (xx_file_type_t)i);
         ++matched;
@@ -35,6 +38,8 @@ int main(void)
     CHECK(matched == count);
     CHECK(!strcmp(xx_format_file_type_to_string(XX_FILE_TYPE_CPX4), "CPX4"));
     CHECK(!strcmp(xx_format_file_type_to_string(XX_FILE_TYPE_TAR_GZ), "TAR.GZ"));
+    CHECK(previous >= XX_FILE_TYPE_SFX_INFTOOL);
+    CHECK(!strcmp(xx_format_file_type_to_string(XX_FILE_TYPE_SFX_INFTOOL), "sfx inftool"));
     text = xfu_supported_types_text(&matched);
     CHECK(text && matched == count && strstr(text, "Supported file types (xxfclib): "));
     cursor = strstr(text, "   ID  File type\n");

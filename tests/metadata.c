@@ -22,6 +22,7 @@ int main(void) {
     static const unsigned char bytes[] = {0x00, 0x7f, 0x80, 0xff};
     static const char text[] = {'a', '\0', '\n', 'b'};
     static const wchar_t wide[] = {L'a', L'\0', 0x03a9};
+    char password[] = "  p\xc3\xa4ss;\n#2\\x0A  ";
     xx_archive_record_init(&record);
     xx_var_init(&var);
     record.header_offset = 42; record.header_size = 31;
@@ -45,6 +46,12 @@ int main(void) {
     CHECK(xx_archive_record_set_meta(&record, 1002, &var));
     xx_var_set_double(&var, 2.5);
     CHECK(xx_archive_record_add_meta(&record, 1002, &var));
+    CHECK(xx_var_set_str(&var, password));
+    CHECK(xx_archive_record_set_meta(&record, XX_META_ID_PASSWORD, &var));
+    /* Recovered metadata must own its value, including whitespace and UTF-8. */
+    memset(password, 'x', sizeof(password) - 1);
+    CHECK(!strcmp(xx_archive_record_get_meta_str(&record, XX_META_ID_PASSWORD),
+                  "  p\xc3\xa4ss;\n#2\\x0A  "));
     CHECK(xfu_record_properties(&record, true, &properties, &count));
     CHECK(count == xx_list_count(&record.list_meta) + 6);
     /* Display properties survive the destruction of the original record. */
@@ -66,6 +73,7 @@ int main(void) {
     CHECK(!strcmp(property(properties, count, "Metadata 1001"), "18446744073709551615"));
     CHECK(!strcmp(property(properties, count, "Metadata 1002"), "1.25"));
     CHECK(!strcmp(property(properties, count, "Metadata 1002 #2"), "2.5"));
+    CHECK(!strcmp(property(properties, count, "Password"), "  p\xc3\xa4ss;\\x0A#2\\\\x0A  "));
     xfu_free_properties(properties, count);
     puts("All record fields, metadata, variants and ZIP interpretations passed");
     return 0;
