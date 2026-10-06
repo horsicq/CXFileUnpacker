@@ -13,6 +13,9 @@ file(GLOB_RECURSE XXFORMATS_SOURCES CONFIGURE_DEPENDS
 # DIE music readers require the separate signature engine and its runtime.
 list(FILTER XXFORMATS_SOURCES EXCLUDE REGEX "/src/formats/die_music/")
 list(APPEND XXFORMATS_SOURCES
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/pdf/xxpdf.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/pdf/xxpdf_decode.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/pdf/xxpdf_extractor.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/nsis/nsis_bzip2.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/fead/encoder/deflate.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/fead/encoder/trees.c
@@ -93,6 +96,8 @@ set_property(SOURCE ${XFILEUNPACKER_XXFCLIB_DIR}/src/data/xx_data_raw.c
     APPEND PROPERTY COMPILE_DEFINITIONS XXFC_FORMATS_ONLY)
 # The detection fallback also depends on the excluded DIE music engine.
 set_property(SOURCE ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/xx_format.c
+    APPEND PROPERTY COMPILE_DEFINITIONS XXFC_FORMATS_ONLY)
+set_property(SOURCE ${XFILEUNPACKER_XXFCLIB_DIR}/src/formats/xx_format_extractor.c
     APPEND PROPERTY COMPILE_DEFINITIONS XXFC_FORMATS_ONLY)
 
 if(MSVC)

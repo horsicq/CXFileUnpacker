@@ -29,9 +29,23 @@ The Universal Extractor 2 expansion adds native Chromium DataPack, Windows
 thumbnail-cache, Enigma, BitRock, Smart Install Maker and MoleBox payload readers;
 gettext/Qt catalogs, MIME messages,
 Windows Help streams, SQLite SQL export and Microsoft Reader books; new game
-resource readers; and decoded multimedia and PDF outputs.
+resource readers; decoded multimedia outputs; and native PDF streams and attachments.
 TEST sends decoded bytes to memory and quiet console testing reports percentages;
 `--verbose` reports each member's result.
+
+The native PDF reader follows cross-reference tables, cross-reference streams,
+compressed object streams and incremental updates. It extracts ordinary streams
+and embedded attachments, preferring Unicode attachment filenames. Ordered
+Flate, LZW, ASCII85, ASCIIHex and RunLength filters and TIFF/PNG predictors are
+decoded; JPEG and JPEG 2000 streams retain their encoded image bytes. PDF carving
+uses the validated document extent. Encrypted documents and unsupported filters
+refuse extraction. Page rendering and page-text interpretation are not provided.
+
+The native `pyc` reader handles Python compiled modules with version-aware
+headers and bounded marshal code-object parsing. The PYC extractor carves the
+validated module extent and excludes trailing data. DIE uses the native readers'
+inspection APIs for PE, ELF, Mach-O, DEX, JPEG, PNG, APK, ZIP, ISO and PYC, as
+well as PDF. Their existing native extractors remain registered.
 
 Additional readers unpack ExcelsiorII1 installers, classic/current SuperDAT LH1
 packages, FEAD packages using the verified Adobe Reader 7.0 layout, UHARC 0.6

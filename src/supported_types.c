@@ -37,8 +37,9 @@ char *xfu_supported_types_text(size_t *count)
         "Named handler suffixes are lowercase; examples: sevenzip_apfs, sevenzip_rar5.\n"
         "\nMedia extraction: composited PNG frames, decoded WAV audio, playable video tracks.\n"
         "Use --reader media, media_frames, media_audio or media_video (Windows x64).\n"
-        "Documents: PDF attachments/text/page bitmaps; MIME bodies and attachments;\n"
+        "Documents: native PDF streams and attachments; MIME bodies and attachments;\n"
         "gettext MO to PO; Qt QM to TS; SQLite SQL export (sqlite3 keeps raw pages).\n"
+        "Native Python bytecode reader and PYC carving (--reader pyc).\n"
         "Game archive fallback: --reader garbro (bundled RAM-only GARbro engine).\n"
         "\n"
         "   ID  File type\n", total);
