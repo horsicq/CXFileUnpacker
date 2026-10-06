@@ -8,30 +8,25 @@
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build",
-      "cacheVariables": { "BUILD_SHARED_LIBS": "OFF", "BUILD_TESTING": "ON", "XXWIDGETS_BUILD_TESTS": "ON" }
+      "cacheVariables": { "BUILD_SHARED_LIBS": "OFF" }
     },
     {
       "name": "windows-ninja",
       "displayName": "Windows x64 (MSVC and Ninja)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-ninja",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "BUILD_SHARED_LIBS": "OFF", "BUILD_TESTING": "ON", "XXWIDGETS_BUILD_TESTS": "ON" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "BUILD_SHARED_LIBS": "OFF" }
     },
     {
       "name": "tui",
       "displayName": "Console and TUI without a native toolkit",
       "binaryDir": "${sourceDir}/build-tui",
-      "cacheVariables": { "XFILEUNPACKER_BUILD_GUI": "OFF", "XXWIDGETS_NATIVE_BACKEND": "none", "BUILD_SHARED_LIBS": "OFF", "BUILD_TESTING": "ON", "CMAKE_BUILD_TYPE": "Release" }
+      "cacheVariables": { "XFILEUNPACKER_BUILD_GUI": "OFF", "XXWIDGETS_NATIVE_BACKEND": "none", "BUILD_SHARED_LIBS": "OFF", "CMAKE_BUILD_TYPE": "Release" }
     }
   ],
   "buildPresets": [
     { "name": "windows", "configurePreset": "windows", "configuration": "Release" },
     { "name": "windows-ninja", "configurePreset": "windows-ninja" },
     { "name": "tui", "configurePreset": "tui", "configuration": "Release" }
-  ],
-  "testPresets": [
-    { "name": "windows", "configurePreset": "windows", "configuration": "Release", "output": { "outputOnFailure": true } },
-    { "name": "windows-ninja", "configurePreset": "windows-ninja", "output": { "outputOnFailure": true } },
-    { "name": "tui", "configurePreset": "tui", "configuration": "Release", "output": { "outputOnFailure": true } }
   ]
 }

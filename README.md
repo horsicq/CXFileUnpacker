@@ -132,10 +132,6 @@ xfu x archive.zip -ooutput --password-env=ARCHIVE_PASSWORD
 xfu t archive.zip -pmy-password
 ```
 
-The optional `xfileunpacker_probe_readers` and
-`xfileunpacker_probe_metadata` build targets support local reader
-and metadata diagnostics.
-
 `xfu --formats` (or `xfu i`) lists every file type in xxfclib's format catalog.
 A compact grouped catalog is in [docs/CURRENT.md](docs/CURRENT.md).
 The catalog includes new archive, disk, filesystem and partition readers.
@@ -182,7 +178,6 @@ Prompt for VS 2022**, change to the project directory, and run:
 ```bat
 cmake --preset windows-ninja
 cmake --build --preset windows-ninja --parallel 10
-ctest --preset windows-ninja
 ```
 
 The executables are in `build-ninja/`:
@@ -199,7 +194,6 @@ You can also use the Visual Studio generator from a regular PowerShell window:
 ```powershell
 cmake --preset windows
 cmake --build --preset windows --parallel
-ctest --preset windows
 ```
 
 With this generator, the executables are in `build/Release/`:
@@ -220,7 +214,6 @@ You can configure the project without presets:
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --parallel
-ctest --test-dir build -C Release --output-on-failure
 ```
 
 ## Portable Windows package
@@ -247,7 +240,6 @@ package's `bin/` directory.
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
-ctest --test-dir build --output-on-failure
 ```
 
 The GUI requires GTK 3.16+ and pkg-config on Linux, or AppKit and Xcode tools

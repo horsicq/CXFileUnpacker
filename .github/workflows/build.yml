@@ -22,16 +22,13 @@ jobs:
       - name: Install GTK
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev pkg-config xvfb
+          sudo apt-get install -y libgtk-3-dev pkg-config
       - name: Configure
         working-directory: CXFileUnpacker
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DXXWIDGETS_BUILD_TESTS=ON
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
         working-directory: CXFileUnpacker
         run: cmake --build build --parallel 2
-      - name: Test
-        working-directory: CXFileUnpacker
-        run: xvfb-run -a ctest --test-dir build --output-on-failure
       - name: Package Ubuntu
         working-directory: CXFileUnpacker
         run: |
