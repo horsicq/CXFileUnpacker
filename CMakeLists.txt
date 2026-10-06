@@ -56,6 +56,43 @@ if(NOT TARGET xxfclib::xxformats)
                 _POSIX_C_SOURCE=200809L WEP_UNIX=AF_UNIX)
         endif()
     endif()
+    # Third-party code kept as upstream ships it: the SQLite amalgamation,
+    # bzip2 (via NSIS), the zlib deflate encoder FEAD carries, and Brotli's
+    # dictionary table. Their known warnings are switched off here, file by
+    # file and warning by warning, so an update stays a drop-in copy and any
+    # other warning they raise still shows.
+    set(_xfu_upstream "${XFILEUNPACKER_XXFCLIB_DIR}/src")
+    set(_xfu_zlib_encoder deflate trees adler32 crc32 compress)
+    list(TRANSFORM _xfu_zlib_encoder PREPEND "${_xfu_upstream}/formats/fead/encoder/")
+    list(TRANSFORM _xfu_zlib_encoder APPEND ".c")
+    if(MSVC)
+        # C4200 flexible array members; C4131 K&R definitions; C4127 constant
+        # conditions; C4244 narrowing upstream relies on; C4702 unreachable code.
+        set_source_files_properties("${_xfu_upstream}/formats/sqlite_sql/xx_sqlite_amalgamation.c"
+            PROPERTIES COMPILE_OPTIONS "/wd4200")
+        set_source_files_properties("${_xfu_upstream}/formats/nsis/nsis_bzip2.c"
+            PROPERTIES COMPILE_OPTIONS "/wd4127;/wd4244;/wd4702")
+        set_source_files_properties(${_xfu_zlib_encoder}
+            PROPERTIES COMPILE_OPTIONS "/wd4131;/wd4127;/wd4244")
+    else()
+        # bzip2's state machine falls through on purpose; the Brotli dictionary
+        # is one string longer than ISO C's minimum-supported length.
+        set_source_files_properties("${_xfu_upstream}/formats/nsis/nsis_bzip2.c"
+            PROPERTIES COMPILE_OPTIONS "-Wno-implicit-fallthrough")
+        set_source_files_properties("${_xfu_upstream}/algo/brotli/xx_brotli_data.c"
+            PROPERTIES COMPILE_OPTIONS "-Wno-overlength-strings")
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            # GCC-only options: Clang warns about names it does not know.
+            # GCC 15 follows a null column name into sqlite3ColumnSetColl's
+            # second strlen, a path SQLite never takes once a type is set;
+            # GCC 16 counts nIdx's loop increment as no use, and reports its
+            # own 8-byte vector stores into bzip2's six-entry selector table.
+            set_source_files_properties("${_xfu_upstream}/formats/sqlite_sql/xx_sqlite_amalgamation.c"
+                PROPERTIES COMPILE_OPTIONS "-Wno-stringop-overread;-Wno-unused-but-set-variable")
+            set_source_files_properties("${_xfu_upstream}/formats/nsis/nsis_bzip2.c"
+                PROPERTIES COMPILE_OPTIONS "-Wno-implicit-fallthrough;-Wno-stringop-overflow")
+        endif()
+    endif()
 endif()
 
 add_library(xfileunpacker_core STATIC
