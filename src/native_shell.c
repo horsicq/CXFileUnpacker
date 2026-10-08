@@ -102,7 +102,7 @@ static void draw_icon(HDC dc, xfu_shell_action action, int x, int y, int disable
     HPEN pen, old_pen;
     HBRUSH brush, old_brush;
     if (!disabled) {
-        if (action == XFU_SHELL_ADD || action == XFU_SHELL_TEST) color = RGB(20, 145, 70);
+        if (action == XFU_SHELL_TEST) color = RGB(20, 145, 70);
         else if (action == XFU_SHELL_OPEN || action == XFU_SHELL_INFO) color = RGB(225, 166, 20);
         else if (action == XFU_SHELL_CANCEL) color = RGB(200, 45, 45);
     }
@@ -119,8 +119,6 @@ static void draw_icon(HDC dc, xfu_shell_action action, int x, int y, int disable
         segment(dc,x+3,y+12,x+25,y+12);
         break;
     }
-    case XFU_SHELL_ADD:
-        Rectangle(dc,x+11,y+2,x+16,y+25); Rectangle(dc,x+2,y+11,x+25,y+16); break;
     case XFU_SHELL_EXTRACT:
         Rectangle(dc,x+11,y+2,x+16,y+15);
         { POINT arrow[]={{x+4,y+13},{x+23,y+13},{x+13,y+23}}; Polygon(dc,arrow,3); }
@@ -290,10 +288,10 @@ int xfu_native_shell_attach(xxwidgets_widget *window, const xfu_shell_button *bu
     memcpy(shell->buttons,buttons,count*sizeof(*buttons));
     shell->menu=CreateMenu(); file=CreatePopupMenu(); view=CreatePopupMenu(); tools=CreatePopupMenu(); help=CreatePopupMenu();
     if (!shell->menu || !file || !view || !tools || !help) {
-        if (file) DestroyMenu(file); if (view) DestroyMenu(view); if (tools) DestroyMenu(tools); if (help) DestroyMenu(help);
+        if (file) { DestroyMenu(file); } if (view) { DestroyMenu(view); } if (tools) { DestroyMenu(tools); } if (help) DestroyMenu(help);
         xfu_native_shell_destroy(shell); return 0;
     }
-    menu_item(file,XFU_SHELL_OPEN,L"&Open archive..."); menu_item(file,XFU_SHELL_ADD,L"&Create archive...");
+    menu_item(file,XFU_SHELL_OPEN,L"&Open archive...");
     menu_item(file,XFU_SHELL_EXTRACT,L"&Extract archive..."); menu_item(file,XFU_SHELL_TEST,L"&Test archive");
     AppendMenuW(file,MF_SEPARATOR,0,NULL); menu_item(file,XFU_SHELL_QUIT,L"E&xit");
     menu_item(view,XFU_SHELL_ROOT,L"Archive &root"); menu_item(view,XFU_SHELL_REFRESH,L"&Refresh");
@@ -322,7 +320,7 @@ int xfu_native_shell_attach(xxwidgets_widget *window, const xfu_shell_button *bu
 
 void xfu_native_shell_set_busy(xfu_native_shell *shell, int busy)
 {
-    static const xfu_shell_action operations[]={XFU_SHELL_OPEN,XFU_SHELL_ADD,XFU_SHELL_EXTRACT,XFU_SHELL_TEST,XFU_SHELL_REFRESH,XFU_SHELL_OPTIONS};
+    static const xfu_shell_action operations[]={XFU_SHELL_OPEN,XFU_SHELL_EXTRACT,XFU_SHELL_TEST,XFU_SHELL_REFRESH,XFU_SHELL_OPTIONS};
     size_t i;
     if (!shell) return;
     shell->busy=busy;

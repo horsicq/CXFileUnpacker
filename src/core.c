@@ -206,6 +206,7 @@ static int walk(const xfu_request *request, const char *unpack_to,
     bool extension_opened = false;
     bool engine_attempted = false;
     bool testing = request->command == XFU_COMMAND_TEST;
+    bool reached_end = false;
     test_monitor monitor = {0};
 
     if (testing && request->callbacks.test_progress)
@@ -554,8 +555,10 @@ next_record:
                 emit(request, true, "archive iteration failed");
                 status = 1; break;
             }
-            if (!next) break;
-        } else if (!xx_format_archive_record_move_to_next(opened.format, state, pd)) break;
+            if (!next) { reached_end = true; break; }
+        } else if (!xx_format_archive_record_move_to_next(opened.format, state, pd)) {
+            reached_end = true; break;
+        }
     }
     xx_format_free_archive_records_reading(opened.format, state);
     xx_list_cleanup(&options);
@@ -584,6 +587,10 @@ next_record:
              archive_path);
         status = 1;
     }
+    if (request->callbacks.walk_end)
+        request->callbacks.walk_end(request->callbacks.user,
+            reached_end && !request->extract_selected && !xx_pd_is_stopped(pd) &&
+            (!known_total || total == known_total) && !xxfc_is_incomplete(&opened));
 done:
     xxfc_close(&opened);
     xx_io_close(device);

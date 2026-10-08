@@ -56,11 +56,11 @@ typedef struct ui_job {
     size_t retrieve_member;
     uint64_t retrieve_revision;
     int retrieve_password;
-    char **files;
     size_t *selected_records;
     ui_mutex mutex;
     ui_thread thread;
     int thread_started, done, result, cancel_requested, memory_error;
+    int read_all; /* The run read every member (walk_end). */
     xx_pd_struct worker_progress, progress_snapshot;
     int overall_level, worker_stopped;
     uint64_t progress_published;
@@ -86,18 +86,15 @@ typedef struct ui_state {
     xxwidgets_widget *output_label, *output_dir;
     xxwidgets_widget *password_label, *password, *get_password;
     xxwidgets_widget *type_label, *file_type;
-    xxwidgets_widget *compression_label, *compression_method, *compression_level_label, *compression_level;
-    xxwidgets_widget *open, *extract, *test, *add, *cancel, *quit;
+    xxwidgets_widget *open, *extract, *test, *cancel, *quit;
     xxwidgets_widget *copy_path, *info, *log_toggle, *advanced, *details, *options, *about_button, *formats_button;
     xxwidgets_widget *members_label, *members, *metadata;
-    xxwidgets_widget *source_label, *source_path, *source_browse, *queue_add, *queue_remove, *queue;
     xxwidgets_widget *progress, *status, *log_label, *log, *help;
-    char **queued_paths;
-    size_t queued_count;
     ui_job *job;
     xfu_entry *listed_entries;
     size_t listed_count;
     char *file_types_path, *pending_type_path;
+    char *members_archive; /* Archive the members view lists, or NULL. */
     char *password_archive, *password_listed_archive;
     char *automatic_password, *automatic_password_display;
     int password_manual, password_updating;
@@ -106,6 +103,7 @@ typedef struct ui_state {
     int retrieve_smoke_click;
     size_t retrieve_smoke_member;
     xx_file_type_t selected_type;
+    size_t file_type_count; /* Entries in the File type list. */
     xfu_command pending_command;
     int pending_extract_selected;
     int type_smoke, type_smoke_stage;
@@ -113,7 +111,9 @@ typedef struct ui_state {
     const char *password_smoke_expected;
     int progress_smoke, progress_smoke_shown, progress_smoke_cancelled;
     uint64_t progress_smoke_started;
-    int running, closing, smoke, exit_code, columns, rows, layout_ready, log_visible, busy, advanced_visible, options_requested, about_requested, formats_requested;
+    int running, closing, smoke, exit_code, columns, rows, layout_ready, log_visible, busy, advanced_visible, options_requested, about_requested, formats_requested, browse_requested;
+    xxwidgets_widget *busy_focus; /* Control that started the running operation. */
+    int window_columns, window_rows; /* Window size in cells last laid out for. */
 #ifdef _WIN32
     int cell_width, cell_height;
     xfu_native_shell *shell;
@@ -398,6 +398,11 @@ static void job_file_types(void *user, const xx_file_type_t *types, size_t count
     job->have_file_types = 1;
 }
 
+static void job_walk_end(void *user, bool complete)
+{
+    ((ui_job *)user)->read_all = complete;
+}
+
 static bool job_observe_progress(const xx_pd_struct *progress, void *user)
 {
     ui_job *job = (ui_job *)user;
@@ -460,17 +465,6 @@ static void *job_worker(void *parameter)
     int result;
     job->overall_level = xx_pd_enter_level(&job->worker_progress, 0, command_name(job->request.command));
     result = xfu_run(&job->request);
-    /* A newly created archive gets a listing through the same format API. */
-    if (job->request.command == XFU_COMMAND_ADD && result == 0 && !job_cancelled(job)) {
-        xfu_request listing = job->request;
-        listing.command = XFU_COMMAND_LIST;
-        listing.files = NULL;
-        listing.file_count = 0;
-        listing.compression_method = NULL;
-        listing.compression_level = 0;
-        listing.compression_level_set = false;
-        result = xfu_run(&listing);
-    }
     if (job->memory_error) {
         job_log(job, true, "Out of memory while collecting archive members.");
         result = 2;
@@ -506,8 +500,6 @@ static void job_destroy(ui_job *job)
     size_t i;
     if (!job) return;
     job_join(job);
-    for (i = 0; i < job->request.file_count; ++i) free(job->files[i]);
-    free(job->files);
     free(job->selected_records);
     free(job->archive_path);
     free(job->output_dir);
@@ -655,65 +647,40 @@ static void append_log(ui_state *ui, const char *line)
     xxwidgets_widget_set_value(ui->log, (int)xxwidgets_listbox_count(ui->log) - 1);
 }
 
-static const char *const wim_methods[] = {"stored", "xpress", "lzx", "lzms"};
-static int wim_destination(const char *path)
-{
-    size_t n = strlen(path ? path : "");
-    return n >= 4 && path[n-4] == '.' && (path[n-3] == 'w' || path[n-3] == 'W') &&
-        (path[n-2] == 'i' || path[n-2] == 'I') && (path[n-1] == 'm' || path[n-1] == 'M');
-}
-static void enable_compression(ui_state *ui, int busy)
-{
-    xx_var value = {0};
-    int enabled = !busy, compressed = 1;
-    if (!ui->compression_method || !ui->compression_level) return;
-    if (xxwidgets_combobox_get_current(ui->compression_method, &value) == XXWIDGETS_OK &&
-        value.type == XX_VAR_TYPE_UINT32) compressed = value.val.u32 != 0;
-    xxwidgets_widget_set_enabled(ui->compression_method, enabled);
-    xxwidgets_widget_set_enabled(ui->compression_level, enabled && compressed);
-}
-/* Snapshots apply only to creating WIM files. Read operations and other
- * writers ignore these controls, including an incomplete level edit. */
-static int compression_snapshot(ui_state *ui, xfu_command command, const char *path,
-                                 xfu_request *request, int report_error)
-{
-    xx_var value = {0}; char *level; size_t i; unsigned number = 0;
-    request->compression_method = NULL; request->compression_level = 0;
-    request->compression_level_set = false;
-    if (command != XFU_COMMAND_ADD || !wim_destination(path)) return 1;
-    if (xxwidgets_combobox_get_current(ui->compression_method, &value) != XXWIDGETS_OK ||
-        value.type != XX_VAR_TYPE_UINT32 || value.val.u32 > 3) {
-        if (report_error) show_status(ui, "Choose a WIM compression method."); return 0;
-    }
-    level = widget_text(ui->compression_level);
-    if (!level || !level[0]) { free(level); if (report_error) show_status(ui, "WIM compression level must be 0..100 (0 selects the default)."); return 0; }
-    for (i = 0; level[i]; ++i) {
-        if (level[i] < '0' || level[i] > '9' || number > 100) break;
-        number = number * 10 + (unsigned)(level[i] - '0');
-    }
-    if (level[i] || number > 100 || (!value.val.u32 && number)) {
-        free(level); if (report_error) show_status(ui, "WIM level must be 0..100; stored uses 0."); return 0;
-    }
-    free(level); request->compression_method = wim_methods[value.val.u32];
-    request->compression_level = (int)number; request->compression_level_set = true; return 1;
-}
-
 static void set_busy(ui_state *ui, int busy)
 {
+    /* About, Options and File types are modal: opened during an operation they
+     * would stop its progress display and keep Cancel out of reach. */
     xxwidgets_widget *controls[] = {
         ui->archive_path, ui->archive_browse, ui->output_dir, ui->open,
-        ui->extract, ui->test, ui->add, ui->source_path, ui->source_browse, ui->password, ui->get_password,
-        ui->queue_add, ui->queue_remove, ui->queue
+        ui->extract, ui->test, ui->password, ui->get_password,
+        ui->options, ui->about_button, ui->formats_button
     };
     size_t i;
+    int cancel_focused = 0;
+    /* A backend moves focus off a control it disables. Cancel is enabled
+     * first, so focus can land there and never fall through to Quit, where
+     * the terminal UI's next Enter would end the program. */
+    if (busy) xxwidgets_widget_set_enabled(ui->cancel, 1);
     for (i = 0; i < sizeof(controls) / sizeof(controls[0]); ++i)
         xxwidgets_widget_set_enabled(controls[i], !busy);
     xxwidgets_widget_set_enabled(ui->file_type, !busy);
     xxwidgets_widget_set_enabled(ui->extract, !busy && ui->selected_type != XX_FILE_TYPE_BINARY);
     xxwidgets_widget_set_enabled(ui->test, !busy && ui->selected_type != XX_FILE_TYPE_BINARY);
-    xxwidgets_widget_set_enabled(ui->cancel, busy);
+    /* Asked before Cancel is disabled, which moves focus off it. -1: unknown. */
+    if (!busy) cancel_focused = xxwidgets_widget_has_focus(ui->cancel);
+    if (!busy) xxwidgets_widget_set_enabled(ui->cancel, 0);
     ui->busy = busy;
-    enable_compression(ui, busy);
+    if (!ui->smoke && ui->layout_ready && !desktop_shell(ui)) {
+        /* Keyboard users keep their place: Cancel while working, then the
+         * control that started the operation, or the Archive field. Focus the
+         * user moved elsewhere during the operation stays where it is. */
+        if (busy) xxwidgets_widget_focus(ui->cancel);
+        else if (cancel_focused != 0 &&
+                 (!ui->busy_focus || xxwidgets_widget_focus(ui->busy_focus) != XXWIDGETS_OK))
+            xxwidgets_widget_focus(ui->archive_path);
+        if (!busy) ui->busy_focus = NULL;
+    }
 #ifdef _WIN32
     xfu_native_shell_set_busy(ui->shell, busy);
     xfu_native_shell_set_archive_enabled(ui->shell, ui->selected_type != XX_FILE_TYPE_BINARY);
@@ -727,7 +694,6 @@ static const char *command_name(xfu_command command)
     case XFU_COMMAND_LIST: return "Listing";
     case XFU_COMMAND_EXTRACT: return "Extracting";
     case XFU_COMMAND_TEST: return "Testing";
-    case XFU_COMMAND_ADD: return "Adding";
     default: return "Working";
     }
 }
@@ -820,9 +786,28 @@ static int apply_advanced(ui_state *ui, int checked)
     return 1;
 }
 
+/* The library/console reference, with a note on what this window leaves to xfu. */
+static char *ui_supported_types_text(size_t *count)
+{
+    static const char note[] =
+        "This window opens, tests and extracts existing archives. Creating archives and the --reader "
+        "options below are console features: xfu a <archive> <file>..., xfu <command> <archive> --reader <name>\n\n";
+    char *text = xfu_supported_types_text(count), *joined;
+    size_t prefix = sizeof(note) - 1, length;
+    if (!text) return NULL;
+    length = strlen(text);
+    joined = (char *)malloc(prefix + length + 1);
+    if (joined) {
+        memcpy(joined, note, prefix);
+        memcpy(joined + prefix, text, length + 1);
+    }
+    free(text);
+    return joined;
+}
+
 static void show_supported_types(ui_state *ui)
 {
-    char *text = xfu_supported_types_text(NULL);
+    char *text = ui_supported_types_text(NULL);
     if (!text) { show_status(ui, "Cannot allocate the supported file type list."); return; }
     if (xxwidgets_text_dialog(ui->window, "Supported file types", text) != XXWIDGETS_OK)
         show_status(ui, "Cannot show the supported file type dialog.");
@@ -898,6 +883,7 @@ static int populate_file_types(ui_state *ui, const ui_job *job)
         xxwidgets_widget_set_value(ui->file_type, (int)selected) != XXWIDGETS_OK) goto done;
     free(ui->file_types_path); ui->file_types_path = path; path = NULL;
     ui->selected_type = job->file_types[selected];
+    ui->file_type_count = job->type_count;
     result = 1;
 done:
     for (i = 0; i < job->type_count; ++i) xx_str_wfree(labels[i].data);
@@ -960,6 +946,7 @@ static int populate_members(ui_state *ui, ui_job *job)
         free_entries(ui->listed_entries, ui->listed_count);
         ui->listed_entries = job->entries; ui->listed_count = job->entry_count;
         job->entries = NULL; job->entry_count = job->entry_capacity = 0;
+        free(ui->members_archive); ui->members_archive = copy_text(job->archive_path);
         if (!autofill_listing_password(ui, job)) return 0;
         update_metadata(ui);
         return 1;
@@ -982,6 +969,7 @@ static int populate_members(ui_state *ui, ui_job *job)
     ui->listed_count = job->entry_count;
     job->entries = NULL;
     job->entry_count = job->entry_capacity = 0;
+    free(ui->members_archive); ui->members_archive = copy_text(job->archive_path);
     if (!autofill_listing_password(ui, job)) return 0;
     update_metadata(ui);
     return 1;
@@ -990,24 +978,51 @@ static int populate_members(ui_state *ui, ui_job *job)
 static int clear_members(ui_state *ui)
 {
     xxwidgets_status status;
-    if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER)
+    if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER) {
         status = xxwidgets_archivebrowser_set_entries(ui->members, NULL, 0);
-    else status = xxwidgets_archiveview_set_entries(ui->members, NULL, 0);
+        /* The path bar must not keep naming the archive that was listed. */
+        if (status == XXWIDGETS_OK) status = xxwidgets_archivebrowser_set_archive(ui->members, "");
+    } else status = xxwidgets_archiveview_set_entries(ui->members, NULL, 0);
     if (status != XXWIDGETS_OK) return 0;
+    free(ui->members_archive); ui->members_archive = NULL;
     free_entries(ui->listed_entries, ui->listed_count);
     ui->listed_entries = NULL; ui->listed_count = 0;
     update_metadata(ui);
     return 1;
 }
 
+#ifndef _WIN32
+/* Fields are not run through a shell: "~" and "~/..." mean the home folder,
+ * not a directory literally named "~". The field then shows the full path. */
+static void expand_home_field(xxwidgets_widget *field)
+{
+    char *text = widget_text(field), *expanded;
+    const char *home = getenv("HOME");
+    if (text && text[0] == '~' && (!text[1] || text[1] == '/') && home && home[0]) {
+        size_t home_length = strlen(home), rest = strlen(text + 1);
+        expanded = (char *)malloc(home_length + rest + 1);
+        if (expanded) {
+            memcpy(expanded, home, home_length);
+            memcpy(expanded + home_length, text + 1, rest + 1);
+            xxwidgets_widget_set_text(field, expanded);
+            free(expanded);
+        }
+    }
+    free(text);
+}
+#endif
+
 static int start_job(ui_state *ui, xfu_command command)
 {
     ui_job *job;
-    size_t i;
     char message[80];
     int known_file, requested_type;
     int retrieve = command == XFU_COMMAND_LIST && ui->pending_password_retrieval;
     if (ui->job) return 0;
+#ifndef _WIN32
+    expand_home_field(ui->archive_path);
+    expand_home_field(ui->output_dir);
+#endif
     ui->pending_password_retrieval = 0;
     job = (ui_job *)calloc(1, sizeof(*job));
     if (!job) { show_status(ui, "Out of memory."); return 0; }
@@ -1072,14 +1087,18 @@ static int start_job(ui_state *ui, xfu_command command)
     job->request.callbacks.progress = job_progress;
     job->request.callbacks.cancelled = job_cancelled;
     job->request.callbacks.file_types = job_file_types;
+    job->request.callbacks.walk_end = job_walk_end;
     job->worker_progress = xx_pd_init();
     job->overall_level = -1;
     job->request.progress_state = &job->worker_progress;
     job->smoke_progress_delay = ui->progress_smoke;
     known_file = ui->file_types_path && !strcmp(ui->file_types_path, job->archive_path);
+    /* A file recognised as no archive at all is detected again: it may have
+     * become one since (a finished download, another file at that path). */
+    if (known_file && ui->selected_type == XX_FILE_TYPE_BINARY && ui->file_type_count <= 1) known_file = 0;
     requested_type = ui->pending_type_path && !strcmp(ui->pending_type_path, job->archive_path);
     free(ui->pending_type_path); ui->pending_type_path = NULL;
-    if (command != XFU_COMMAND_ADD && (known_file || requested_type))
+    if (known_file || requested_type)
         job->request.file_type = ui->selected_type;
     else ui->selected_type = XX_FILE_TYPE_UNKNOWN;
     if (ui->selected_type == XX_FILE_TYPE_UNKNOWN) {
@@ -1125,21 +1144,6 @@ static int start_job(ui_state *ui, xfu_command command)
         job->request.selected_record_count = count;
         job->request.callbacks.entry = NULL;
     }
-    if (command == XFU_COMMAND_ADD) {
-        if (!compression_snapshot(ui, command, job->archive_path, &job->request, 1)) { job_destroy(job); return 0; }
-        if (!ui->queued_count) {
-            show_status(ui, "Queue at least one source file before Add (a).");
-            job_destroy(job); return 0;
-        }
-        job->files = (char **)calloc(ui->queued_count, sizeof(*job->files));
-        if (!job->files) { show_status(ui, "Out of memory."); job_destroy(job); return 0; }
-        job->request.file_count = ui->queued_count;
-        for (i = 0; i < ui->queued_count; ++i) {
-            job->files[i] = copy_text(ui->queued_paths[i]);
-            if (!job->files[i]) { show_status(ui, "Out of memory."); job_destroy(job); return 0; }
-        }
-        job->request.files = (const char *const *)job->files;
-    }
 #ifdef _WIN32
     job->thread = CreateThread(NULL, 0, job_worker, job, 0, NULL);
     if (!job->thread) {
@@ -1163,6 +1167,9 @@ static int start_job(ui_state *ui, xfu_command command)
          * Keep the job and its mutex alive until the worker has exited. */
         if (status != XXWIDGETS_OK) cancel_job(ui);
         job_join(job);
+        /* Cancelled from the dialog: as after the main Cancel, a second Enter
+         * must not land on Extract and start it again. */
+        if (job->cancel_requested && !ui->closing) ui->busy_focus = ui->members;
         if (status != XXWIDGETS_OK) {
             snprintf(message, sizeof(message), "Progress dialog: %s", xxwidgets_status_string(status));
             if (ui->progress_smoke) fprintf(stderr, "%s\n", message);
@@ -1188,7 +1195,102 @@ static void cancel_job(ui_state *ui)
     ui->job->cancel_requested = 1;
     mutex_unlock(&ui->job->mutex);
     show_status(ui, "Stopping archive worker...");
-    xxwidgets_widget_set_enabled(ui->cancel, 0);
+    ui->busy_focus = ui->members;
+}
+
+/* A member path without its trailing separators, so a folder record ("b/",
+ * or "b" in 7z) and a folder implied by its members ("b/") match. */
+static int same_member_path(const char *a, const char *b)
+{
+    size_t m = strlen(a), n = strlen(b);
+    while (m && (a[m - 1] == '/' || a[m - 1] == '\\')) --m;
+    while (n && (b[n - 1] == '/' || b[n - 1] == '\\')) --n;
+    return m == n && !strncmp(a, b, m);
+}
+
+static size_t member_rows(ui_state *ui)
+{
+    return xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER ?
+        xxwidgets_archivebrowser_visible_count(ui->members) : xxwidgets_archiveview_count(ui->members);
+}
+
+/* The path of a members row (a browser row in the folder shown, or an
+ * archive view entry), borrowed from the widget, and whether it is a folder;
+ * NULL on failure. */
+static const char *member_row_path(ui_state *ui, size_t row, int *is_directory)
+{
+    if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER) {
+        xxwidgets_archive_browser_entry entry;
+        size_t source;
+        if (xxwidgets_archivebrowser_get_entry(ui->members, row, &source, &entry) != XXWIDGETS_OK) return NULL;
+        *is_directory = entry.is_directory != 0; return entry.path;
+    } else {
+        xxwidgets_archive_entry entry;
+        if (xxwidgets_archiveview_get_entry(ui->members, row, &entry) != XXWIDGETS_OK) return NULL;
+        *is_directory = entry.is_directory != 0; return entry.path;
+    }
+}
+
+/* The current members row, so a relisting can show it again: its path,
+ * whether it is a folder (a file "b" and a folder "b/" are different rows)
+ * and which of the rows with that path and kind it is (archives can hold a
+ * path twice). NULL when nothing is current. */
+static char *current_member_path(ui_state *ui, size_t *occurrence, int *is_directory)
+{
+    const char *path;
+    size_t row;
+    int value = -1, kind = 0;
+    *occurrence = 0; *is_directory = 0;
+    if (xxwidgets_widget_get_value(ui->members, &value) != XXWIDGETS_OK || value < 0 ||
+        !(path = member_row_path(ui, (size_t)value, is_directory))) return NULL;
+    for (row = 0; row < (size_t)value; ++row) {
+        const char *other = member_row_path(ui, row, &kind);
+        if (other && kind == *is_directory && same_member_path(other, path)) ++*occurrence;
+    }
+    return copy_text(path);
+}
+
+/* Make that row current again if the listing still has it. */
+static int select_member_path(ui_state *ui, const char *path, size_t occurrence, int is_directory)
+{
+    size_t row, count, seen = 0;
+    int found = -1, kind = 0;
+    if (!path) return 0;
+    count = member_rows(ui);
+    for (row = 0; row < count && row <= INT_MAX; ++row) {
+        const char *other = member_row_path(ui, row, &kind);
+        if (!other || kind != is_directory || !same_member_path(other, path)) continue;
+        found = (int)row; /* Fewer copies than before: the last one. */
+        if (seen++ == occurrence) break;
+    }
+    return found >= 0 && xxwidgets_widget_set_value(ui->members, found) == XXWIDGETS_OK;
+}
+
+/* Whether a Test or Extract of the archive on screen leaves the listing (and
+ * the user's folder and selection) alone. It does while the members the run
+ * read match the listing. A run that read every member (with or without
+ * failed members) must match it all; one that was cancelled or stopped early
+ * may have read only the first of them. A file replaced on disk shows as a
+ * mismatch, or as a detected type chain without the type it was listed as. */
+static int keep_listing(const ui_state *ui, const ui_job *job, int cancelled)
+{
+    size_t i;
+    if (job->request.command == XFU_COMMAND_LIST || job->retrieve_password || !ui->listed_count ||
+        !ui->file_types_path || strcmp(ui->file_types_path, job->archive_path)) return 0;
+    if (job->have_file_types && job->request.file_type != XX_FILE_TYPE_UNKNOWN) {
+        for (i = 0; i < job->type_count && job->file_types[i] != job->request.file_type; ++i) {}
+        if (i == job->type_count) return 0;
+    }
+    if (job->entry_count > ui->listed_count) return 0;
+    if ((job->read_all || (!cancelled && job->result == 0)) && ui->listed_count != job->entry_count) return 0;
+    for (i = 0; i < job->entry_count; ++i) {
+        const xfu_entry *listed = &ui->listed_entries[i], *read = &job->entries[i];
+        if (!listed->name || !read->name || strcmp(listed->name, read->name) ||
+            listed->unpacked_size != read->unpacked_size || listed->packed_size != read->packed_size ||
+            listed->is_directory != read->is_directory || strcmp(listed->modified, read->modified) ||
+            strcmp(listed->attributes, read->attributes)) return 0;
+    }
+    return 1;
 }
 
 static void drain_job(ui_state *ui)
@@ -1243,10 +1345,34 @@ static void drain_job(ui_state *ui)
         append_log(ui, "Could not display the detected file types."); job->result = 2; display_ok = 0;
     }
     if ((!job->retrieve_password || (job->result == 0 && !cancelled && retrieval_current)) &&
-        !job->request.extract_selected && !populate_members(ui, job)) {
-        append_log(ui, "Could not display archive members."); job->result = 2; display_ok = 0;
+        !job->request.extract_selected &&
+        !keep_listing(ui, job, cancelled)) {
+        /* A password retrieval, or a complete Test/Extract of an archive
+         * changed on disk, lists the archive on screen again: keep the folder
+         * and the current row the user had, or no current row (a recovered
+         * member's folder wins later). Open starts at the root, and so does a
+         * partial relisting. */
+        int browser = xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER;
+        int keep = (job->retrieve_password || (job->request.command != XFU_COMMAND_LIST && !cancelled && job->read_all)) &&
+            ui->members_archive && !strcmp(ui->members_archive, job->archive_path) && ui->listed_count;
+        size_t occurrence = 0;
+        int current_directory = 0;
+        char *directory = keep && browser ? copy_text(xxwidgets_archivebrowser_directory(ui->members)) : NULL;
+        char *current = keep ? current_member_path(ui, &occurrence, &current_directory) : NULL;
+        if (!populate_members(ui, job)) {
+            append_log(ui, "Could not display archive members."); job->result = 2; display_ok = 0;
+        } else if (keep) {
+            /* A folder that is gone leaves the root shown, with its first row. */
+            int restored = !directory || !directory[0] ||
+                xxwidgets_archivebrowser_set_directory(ui->members, directory) == XXWIDGETS_OK;
+            if (current) select_member_path(ui, current, occurrence, current_directory);
+            else if (browser && restored) xxwidgets_archivebrowser_set_selection(ui->members, NULL, 0);
+            update_metadata(ui);
+        }
+        free(directory); free(current);
     }
-    if (cancelled) show_status(ui, "Cancelled. Completed files are kept.");
+    if (cancelled) show_status(ui, job->request.command == XFU_COMMAND_EXTRACT ?
+        "Cancelled. Completed files are kept." : "Cancelled.");
     else if (!job->retrieve_password && job->request.command == XFU_COMMAND_LIST && job->have_file_types &&
              job->selected_type == XX_FILE_TYPE_BINARY && !job->memory_error && display_ok) {
         show_status(ui, "Binary: no archive members."); job->result = 0;
@@ -1293,37 +1419,26 @@ static void drain_job(ui_state *ui)
     if (ui->closing) ui->running = 0;
 }
 
-static int queue_path(ui_state *ui, const char *path)
+#ifndef _WIN32
+/* Runs from the main loop: the chooser is modal and cannot open inside an
+ * input callback. */
+static int browse_file(ui_state *ui, xxwidgets_widget *target)
 {
-    char **grown, *copy;
-    if (!path || !path[0]) { show_status(ui, "Enter a source file path."); return 0; }
-    copy = copy_text(path);
-    if (!copy) { show_status(ui, "Out of memory."); return 0; }
-    grown = (char **)realloc(ui->queued_paths, (ui->queued_count + 1) * sizeof(*grown));
-    if (!grown) { free(copy); show_status(ui, "Out of memory."); return 0; }
-    ui->queued_paths = grown;
-    if (xxwidgets_listbox_add(ui->queue, path) != XXWIDGETS_OK) { free(copy); return 0; }
-    ui->queued_paths[ui->queued_count++] = copy;
-    xxwidgets_widget_set_value(ui->queue, (int)ui->queued_count - 1);
-    show_status(ui, "Source file queued. Add (a) creates a new archive at the archive path.");
-    return 1;
+    char *current = widget_text(target), *selected = NULL;
+    int accepted = 0;
+    xxwidgets_status status = xxwidgets_file_dialog(ui->window, XXWIDGETS_FILE_DIALOG_OPEN,
+        "Open archive", current, &selected, &accepted);
+    free(current);
+    if (status != XXWIDGETS_OK) { show_status(ui, "Cannot show the file dialog."); return 0; }
+    if (!accepted) return 0;
+    status = xxwidgets_widget_set_text(target, selected);
+    free(selected);
+    /* The field holds UTF-8; a name in another encoding cannot be shown there. */
+    if (status == XXWIDGETS_INVALID_ARGUMENT)
+        show_status(ui, "The selected file name is not valid UTF-8; rename the file to open it here.");
+    return status == XXWIDGETS_OK;
 }
-
-static void remove_queued(ui_state *ui)
-{
-    int selected = -1;
-    size_t i;
-    xxwidgets_widget_get_value(ui->queue, &selected);
-    if (selected < 0 || (size_t)selected >= ui->queued_count) return;
-    free(ui->queued_paths[selected]);
-    for (i = (size_t)selected + 1; i < ui->queued_count; ++i)
-        ui->queued_paths[i - 1] = ui->queued_paths[i];
-    --ui->queued_count;
-    xxwidgets_listbox_clear(ui->queue);
-    for (i = 0; i < ui->queued_count; ++i) xxwidgets_listbox_add(ui->queue, ui->queued_paths[i]);
-    if (ui->queued_count) xxwidgets_widget_set_value(ui->queue,
-        (size_t)selected < ui->queued_count ? selected : (int)ui->queued_count - 1);
-}
+#endif
 
 #ifdef _WIN32
 static char *wide_utf8(const wchar_t *wide)
@@ -1382,58 +1497,6 @@ static int browse_file(ui_state *ui, xxwidgets_widget *target)
     selected = wide_utf8(path);
     if (selected) { xxwidgets_widget_set_text(target, selected); free(selected); return 1; }
     return 0;
-}
-
-static void clear_queue(ui_state *ui)
-{
-    size_t i;
-    for (i = 0; i < ui->queued_count; ++i) free(ui->queued_paths[i]);
-    free(ui->queued_paths); ui->queued_paths = NULL; ui->queued_count = 0;
-    xxwidgets_listbox_clear(ui->queue);
-}
-
-static void native_create_archive(ui_state *ui)
-{
-    wchar_t *sources = (wchar_t *)calloc(65536, sizeof(*sources));
-    wchar_t archive[32768] = L"";
-    OPENFILENAMEW dialog;
-    wchar_t *item;
-    int ok = 1;
-    if (!sources) { show_status(ui, "Out of memory."); return; }
-    memset(&dialog, 0, sizeof(dialog));
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = (HWND)xxwidgets_widget_native_handle(ui->window);
-    dialog.lpstrTitle = L"Select files for a new archive";
-    dialog.lpstrFilter = L"All files\0*.*\0\0";
-    dialog.lpstrFile = sources; dialog.nMaxFile = 65536;
-    dialog.Flags = OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (!GetOpenFileNameW(&dialog)) { free(sources); return; }
-    dialog.lpstrTitle = L"Create archive";
-    dialog.lpstrFilter = L"7z archive\0*.7z\0ZIP archive\0*.zip\0TAR archive\0*.tar\0GZIP stream (one file)\0*.gz\0BZIP2 stream (one file)\0*.bz2\0XZ stream (one file)\0*.xz\0WIM image\0*.wim\0Gzip TAR archive\0*.tar.gz\0Bzip2 TAR archive\0*.tar.bz2\0XZ TAR archive\0*.tar.xz\0Zstd TAR archive\0*.tar.zst\0LZ4 TAR archive\0*.tar.lz4\0CPIO archive\0*.cpio\0All files\0*.*\0\0";
-    dialog.lpstrFile = archive; dialog.nMaxFile = 32768; dialog.lpstrDefExt = L"7z";
-    dialog.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (!GetSaveFileNameW(&dialog)) { free(sources); return; }
-    clear_queue(ui);
-    item = sources + wcslen(sources) + 1;
-    if (!*item) {
-        char *path = wide_utf8(sources);
-        ok = path && queue_path(ui, path); free(path);
-    } else {
-        while (*item && ok) {
-            size_t length = wcslen(sources) + wcslen(item) + 2;
-            wchar_t *joined = (wchar_t *)malloc(length * sizeof(*joined));
-            char *path = NULL;
-            if (joined) { swprintf(joined, length, L"%ls\\%ls", sources, item); path = wide_utf8(joined); }
-            ok = path && queue_path(ui, path); free(path); free(joined);
-            item += wcslen(item) + 1;
-        }
-    }
-    free(sources);
-    if (ok) {
-        char *path = wide_utf8(archive);
-        if (path) { xxwidgets_widget_set_text(ui->archive_path, path); free(path); ui->pending_command = XFU_COMMAND_ADD; }
-        else show_status(ui, "Cannot read the selected archive path.");
-    } else { clear_queue(ui); show_status(ui, "Could not queue the selected files."); }
 }
 
 static int CALLBACK native_folder_callback(HWND dialog, UINT message, LPARAM parameter, LPARAM owner)
@@ -1591,8 +1654,7 @@ static void run_native_action(ui_state *ui)
     }
     if (action == XFU_SHELL_OPEN) {
         if (browse_file(ui, ui->archive_path)) ui->pending_command = XFU_COMMAND_LIST;
-    } else if (action == XFU_SHELL_ADD) native_create_archive(ui);
-    else if (action == XFU_SHELL_EXTRACT) native_extract_archive(ui, 0);
+    } else if (action == XFU_SHELL_EXTRACT) native_extract_archive(ui, 0);
     else if (action == XFU_SHELL_EXTRACT_SELECTED) native_extract_archive(ui, 1);
     else if (action == XFU_SHELL_TEST) ui->pending_command = XFU_COMMAND_TEST;
     else if (action == XFU_SHELL_REFRESH) ui->pending_command = XFU_COMMAND_LIST;
@@ -1612,7 +1674,7 @@ static void run_native_action(ui_state *ui)
 static int install_native_shortcuts(ui_state *ui)
 {
     static const struct { const char *name, *sequence; xfu_shell_action action; } definitions[] = {
-        {"open", "Ctrl+O", XFU_SHELL_OPEN}, {"create_archive", "Ctrl+N", XFU_SHELL_ADD},
+        {"open", "Ctrl+O", XFU_SHELL_OPEN},
         {"extract", "Ctrl+E", XFU_SHELL_EXTRACT},
         {"extract_selected", "Ctrl+Shift+E", XFU_SHELL_EXTRACT_SELECTED},
         {"test", "Ctrl+T", XFU_SHELL_TEST}, {"copy_path", "Ctrl+Shift+C", XFU_SHELL_COPY},
@@ -1652,6 +1714,11 @@ static int install_native_shortcuts(ui_state *ui)
 }
 #endif
 
+/* Smallest grid the classic layout arranges; smaller windows and terminals
+ * are laid out at this size. */
+#define CLASSIC_MIN_COLUMNS 76
+#define CLASSIC_MIN_ROWS 23
+
 static void rect(xxwidgets_widget *widget, int x, int y, int width, int height)
 {
     xxwidgets_rect bounds = { x, y, width > 0 ? width : 1, height > 0 ? height : 1 };
@@ -1660,14 +1727,13 @@ static void rect(xxwidgets_widget *widget, int x, int y, int width, int height)
 
 static void layout(ui_state *ui, int columns, int rows)
 {
-    int extra, archive_height, queue_height, log_height, metadata_y, source_y, progress_y;
+    int extra, archive_height, log_height, metadata_y, progress_y;
     int native_browse = ui->backend == XXWIDGETS_BACKEND_NATIVE;
     int browse_width;
     if (desktop_shell(ui)) {
         xxwidgets_widget *hidden[] = {
             ui->archive_label, ui->archive_path, ui->archive_browse, ui->output_label, ui->output_dir,
-            ui->members_label, ui->source_label, ui->source_path, ui->source_browse,
-            ui->queue_add, ui->queue_remove, ui->queue, ui->quit, ui->help, ui->add,
+            ui->members_label, ui->quit, ui->help,
             ui->log_toggle, ui->cancel, ui->options, ui->about_button, ui->formats_button
         };
         xxwidgets_widget *toolbar[] = { ui->open, ui->extract, ui->test,
@@ -1690,13 +1756,9 @@ static void layout(ui_state *ui, int columns, int rows)
         rect(ui->password_label, 1, 3, 21, 1);
         rect(ui->password, 22, 3, columns - 41, 1);
         rect(ui->get_password, columns - 17, 3, 16, 1);
-        rect(ui->compression_label, 1, 4, 12, 1);
-        rect(ui->compression_method, 14, 4, 12, 1);
-        rect(ui->compression_level_label, 29, 4, 20, 1);
-        rect(ui->compression_level, 50, 4, 5, 1);
         log_rows = ui->log_visible ? 7 : 0;
         detail_rows = ui->advanced_visible ? (rows - log_rows - 10 < 6 ? rows - log_rows - 10 : 6) : 0;
-        rect(ui->members, 0, 5, columns, rows - 6 - log_rows - detail_rows);
+        rect(ui->members, 0, 4, columns, rows - 5 - log_rows - detail_rows);
         xxwidgets_widget_set_visible(ui->details, ui->advanced_visible);
         if (ui->advanced_visible) rect(ui->details, 1, rows - 1 - detail_rows - log_rows, columns - 2, detail_rows);
         xxwidgets_widget_set_visible(ui->log_label, ui->log_visible);
@@ -1714,57 +1776,46 @@ static void layout(ui_state *ui, int columns, int rows)
         return;
     }
 #ifndef _WIN32
-    native_browse = 0;
+    /* Win32 browses with its common dialog; other desktops need a native chooser. */
+    if (!xxwidgets_file_dialog_available(ui->app)) native_browse = 0;
 #endif
-    if (columns < 76) columns = 76;
-    if (rows < 23) rows = 23;
+    if (columns < CLASSIC_MIN_COLUMNS) columns = CLASSIC_MIN_COLUMNS;
+    if (rows < CLASSIC_MIN_ROWS) rows = CLASSIC_MIN_ROWS;
     ui->columns = columns; ui->rows = rows;
     browse_width = native_browse ? 11 : 0;
     rect(ui->archive_label, 1, 0, 9, 1);
     rect(ui->archive_path, 10, 0, columns - 11 - browse_width, 1);
     rect(ui->archive_browse, columns - 11, 0, 10, 1);
     xxwidgets_widget_set_visible(ui->archive_browse, native_browse);
-    rect(ui->compression_label, 1, 1, 12, 1);
-    rect(ui->compression_method, 14, 1, 12, 1);
-    rect(ui->compression_level_label, 29, 1, 20, 1);
-    rect(ui->compression_level, 50, 1, 5, 1);
-    rect(ui->output_label, 1, 2, 9, 1);
-    rect(ui->output_dir, 10, 2, columns - 40, 1);
-    rect(ui->type_label, columns - 29, 2, 10, 1);
-    rect(ui->file_type, columns - 19, 2, 18, 1);
-    rect(ui->password_label, 1, 3, 21, 1);
-    rect(ui->password, 22, 3, columns - 41, 1);
-    rect(ui->get_password, columns - 17, 3, 16, 1);
-    rect(ui->open, 1, 4, 11, 1);
-    rect(ui->extract, 13, 4, 13, 1);
-    rect(ui->test, 27, 4, 10, 1);
-    rect(ui->add, 38, 4, 10, 1);
-    rect(ui->cancel, 49, 4, 10, 1);
-    rect(ui->quit, 61, 4, 10, 1);
-    rect(ui->advanced, columns - 17, 6, 16, 1);
-    rect(ui->options, columns - 31, 6, 12, 1);
-    rect(ui->about_button, columns - 43, 6, 10, 1);
-    rect(ui->formats_button, columns - 58, 6, 13, 1);
+    rect(ui->output_label, 1, 1, 9, 1);
+    rect(ui->output_dir, 10, 1, columns - 40, 1);
+    rect(ui->type_label, columns - 29, 1, 10, 1);
+    rect(ui->file_type, columns - 19, 1, 18, 1);
+    rect(ui->password_label, 1, 2, 21, 1);
+    rect(ui->password, 22, 2, columns - 41, 1);
+    rect(ui->get_password, columns - 17, 2, 16, 1);
+    rect(ui->open, 1, 3, 11, 1);
+    rect(ui->extract, 13, 3, 13, 1);
+    rect(ui->test, 27, 3, 10, 1);
+    rect(ui->cancel, 38, 3, 10, 1);
+    rect(ui->quit, 49, 3, 10, 1);
+    rect(ui->advanced, columns - 17, 5, 16, 1);
+    rect(ui->options, columns - 30, 5, 12, 1);
+    rect(ui->about_button, columns - 41, 5, 10, 1);
+    rect(ui->formats_button, columns - 57, 5, 15, 1);
     xxwidgets_widget_set_visible(ui->details, ui->advanced_visible);
+    /* Rows 0-5 hold the fields, buttons and the members heading; the rest is
+     * members, metadata, optional details, progress, status, log and help. */
     extra = rows - 23;
-    queue_height = 2 + extra / 7;
     log_height = 2 + extra / 4;
-    archive_height = 4 + extra - extra / 7 - extra / 4;
+    archive_height = rows - 12 - log_height;
     if (ui->advanced_visible) archive_height -= 3;
-    metadata_y = 7 + archive_height;
-    source_y = metadata_y + 2 + (ui->advanced_visible ? 3 : 0);
-    progress_y = source_y + 2 + queue_height;
-    rect(ui->members_label, 1, 6, columns - 60, 1);
-    rect(ui->members, 1, 7, columns - 2, archive_height);
+    metadata_y = 6 + archive_height;
+    progress_y = metadata_y + 2 + (ui->advanced_visible ? 3 : 0);
+    rect(ui->members_label, 1, 5, columns - 59, 1);
+    rect(ui->members, 1, 6, columns - 2, archive_height);
     rect(ui->metadata, 1, metadata_y, columns - 2, 1);
     if (ui->advanced_visible) rect(ui->details, 1, metadata_y + 1, columns - 2, 3);
-    rect(ui->source_label, 1, source_y, 9, 1);
-    rect(ui->source_path, 10, source_y, columns - 34 - browse_width, 1);
-    rect(ui->source_browse, columns - 24 - browse_width, source_y, 10, 1);
-    xxwidgets_widget_set_visible(ui->source_browse, native_browse);
-    rect(ui->queue_add, columns - 24, source_y, 10, 1);
-    rect(ui->queue_remove, columns - 13, source_y, 12, 1);
-    rect(ui->queue, 1, source_y + 1, columns - 2, queue_height);
     rect(ui->progress, 1, progress_y, columns - 2, 1);
     rect(ui->status, 1, progress_y + 1, columns - 2, 1);
     rect(ui->log_label, 1, progress_y + 2, columns - 2, 1);
@@ -1780,8 +1831,19 @@ static void resize_native(ui_state *ui)
         GetClientRect((HWND)xxwidgets_widget_native_handle(ui->window), &bounds))
         layout(ui, (bounds.right - bounds.left) / ui->cell_width,
                (bounds.bottom - bounds.top) / ui->cell_height);
-#else
+#elif defined(__APPLE__)
+    /* AppKit rounds window sizes to the nearest cell and is left as it was. */
     (void)ui;
+#else
+    /* The backend has already converted the new window size to cells. */
+    xxwidgets_rect bounds;
+    if (ui->layout_ready && ui->backend == XXWIDGETS_BACKEND_NATIVE &&
+        xxwidgets_widget_get_rect(ui->window, &bounds) == XXWIDGETS_OK &&
+        (bounds.width != ui->window_columns || bounds.height != ui->window_rows)) {
+        ui->window_columns = bounds.width;
+        ui->window_rows = bounds.height;
+        layout(ui, bounds.width, bounds.height);
+    }
 #endif
 }
 
@@ -1808,8 +1870,8 @@ static void resize_terminal(ui_state *ui)
     }
 #endif
     columns -= 2; rows -= 2;
-    if (columns < 76) columns = 76;
-    if (rows < 23) rows = 23;
+    if (columns < CLASSIC_MIN_COLUMNS) columns = CLASSIC_MIN_COLUMNS;
+    if (rows < CLASSIC_MIN_ROWS) rows = CLASSIC_MIN_ROWS;
     if (columns == ui->columns && rows == ui->rows) return;
     bounds.x = bounds.y = 0; bounds.width = columns; bounds.height = rows;
     xxwidgets_widget_set_rect(ui->window, bounds);
@@ -1834,7 +1896,21 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
 {
     ui_state *ui = (ui_state *)user;
     (void)app;
+#ifndef _WIN32
+    if (!ui->job && !ui->closing &&
+        ((event->type == XXWIDGETS_EVENT_CLICK &&
+          (event->widget == ui->open || event->widget == ui->extract || event->widget == ui->test ||
+           event->widget == ui->archive_browse || event->widget == ui->get_password)) ||
+         (event->type == XXWIDGETS_EVENT_ACTIVATE && event->widget == ui->archive_path) ||
+         (event->type == XXWIDGETS_EVENT_SELECT && event->widget == ui->file_type))) {
+        /* Before the action reads them, so Browse, File type and the job all
+         * see the same path. */
+        expand_home_field(ui->archive_path);
+        expand_home_field(ui->output_dir);
+    }
+#endif
     if (event->type == XXWIDGETS_EVENT_CLICK && event->widget == ui->get_password) {
+        ui->busy_focus = ui->get_password;
         queue_password_retrieval(ui);
     } else if (event->type == XXWIDGETS_EVENT_CHANGE && event->widget == ui->password) {
         password_edited(ui);
@@ -1842,12 +1918,6 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         char *path = widget_text(ui->archive_path);
         if (!path || !password_archive_changed(ui, path)) show_status(ui, "Cannot reset the archive password.");
         free(path);
-        enable_compression(ui, ui->busy);
-    } else if (event->widget == ui->compression_method && event->type == XXWIDGETS_EVENT_SELECT && !ui->busy) {
-        xx_var value = {0};
-        if (xxwidgets_combobox_get_current(ui->compression_method, &value) == XXWIDGETS_OK &&
-            value.type == XX_VAR_TYPE_UINT32 && !value.val.u32) xxwidgets_widget_set_text(ui->compression_level, "0");
-        enable_compression(ui, ui->busy);
     } else if (event->type == XXWIDGETS_EVENT_SHORTCUT && event->widget == ui->window) {
 #ifdef _WIN32
         if (desktop_shell(ui)) ui->pending_action = (xfu_shell_action)event->value;
@@ -1855,6 +1925,7 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
     } else if (event->widget == ui->file_type && event->type == XXWIDGETS_EVENT_SELECT &&
                !ui->job && !ui->closing) {
         xx_var value = {0};
+        ui->busy_focus = ui->file_type;
         if (xxwidgets_combobox_get_current(ui->file_type, &value) == XXWIDGETS_OK &&
             value.type == XX_VAR_TYPE_UINT32) {
             char *path = widget_text(ui->archive_path);
@@ -1885,6 +1956,11 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         resize_native(ui);
     } else if ((event->type == XXWIDGETS_EVENT_SELECT || event->type == XXWIDGETS_EVENT_CHANGE) && event->widget == ui->members) {
         update_metadata(ui);
+    } else if (event->type == XXWIDGETS_EVENT_ACTIVATE && event->widget == ui->archive_path) {
+        if (!ui->job && !ui->closing) {
+            ui->pending_command = XFU_COMMAND_LIST;
+            ui->busy_focus = ui->archive_path;
+        }
     } else if (event->type == XXWIDGETS_EVENT_ACTIVATE && event->widget == ui->members) {
 #ifdef _WIN32
         if (desktop_shell(ui)) ui->pending_action = XFU_SHELL_INFO;
@@ -1900,7 +1976,6 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
 #ifdef _WIN32
         if (desktop_shell(ui)) {
             if (event->widget == ui->open) ui->pending_action = XFU_SHELL_OPEN;
-            else if (event->widget == ui->add) ui->pending_action = XFU_SHELL_ADD;
             else if (event->widget == ui->extract) ui->pending_action = XFU_SHELL_EXTRACT;
             else if (event->widget == ui->test) ui->pending_action = XFU_SHELL_TEST;
             else if (event->widget == ui->copy_path) ui->pending_action = XFU_SHELL_COPY;
@@ -1915,16 +1990,9 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
             if (event->widget == ui->open) ui->pending_command = XFU_COMMAND_LIST;
             else if (event->widget == ui->extract) ui->pending_command = XFU_COMMAND_EXTRACT;
             else if (event->widget == ui->test) ui->pending_command = XFU_COMMAND_TEST;
-            else if (event->widget == ui->add) ui->pending_command = XFU_COMMAND_ADD;
-            else if (event->widget == ui->queue_add) {
-                char *path = widget_text(ui->source_path);
-                if (path && queue_path(ui, path)) xxwidgets_widget_set_text(ui->source_path, "");
-                free(path);
-            } else if (event->widget == ui->queue_remove) remove_queued(ui);
-#ifdef _WIN32
-            else if (event->widget == ui->archive_browse) browse_file(ui, ui->archive_path);
-            else if (event->widget == ui->source_browse) browse_file(ui, ui->source_path);
-#endif
+            else if (event->widget == ui->archive_browse) ui->browse_requested = 1;
+            if (event->widget == ui->open || event->widget == ui->extract || event->widget == ui->test ||
+                event->widget == ui->archive_browse) ui->busy_focus = event->widget;
         }
     }
 }
@@ -1978,7 +2046,7 @@ static int finish_password_retrieval(ui_state *ui, const ui_job *job)
     }
     if (source >= ui->listed_count || !ui->listed_entries[source].embedded_password) {
         show_status(ui, job->retrieve_member == SIZE_MAX ? "No embedded password is available; existing input kept." :
-                    "No embedded password is available for the selected member; existing input kept.");
+                    "The selected member has no embedded password; existing input kept.");
         return 1;
     }
     ui->password_manual = 0;
@@ -2178,6 +2246,12 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
     if (xxwidgets_app_create(&config, &ui->app) != XXWIDGETS_OK) return 0;
     if (xxwidgets_widget_create(ui->app, NULL, XXWIDGETS_WINDOW,
         "XFileUnpacker", bounds, &ui->window) != XXWIDGETS_OK) return 0;
+#ifndef _WIN32
+    /* The classic layout follows RESIZE, so the window may shrink to its
+     * minimum. Should the backend refuse, the window only loses that limit. */
+    if (ui->backend == XXWIDGETS_BACKEND_NATIVE)
+        (void)xxwidgets_window_set_minimum_size(ui->window, CLASSIC_MIN_COLUMNS, CLASSIC_MIN_ROWS);
+#endif
     if (!create_about(ui)) return 0;
     if (ui->smoke) xxwidgets_widget_set_visible(ui->window, 0);
     if (ui->backend == XXWIDGETS_BACKEND_NATIVE) xfu_set_application_icon(ui->window);
@@ -2185,42 +2259,35 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
     CONTROL(archive_label, XXWIDGETS_LABEL, "Archive:");
     CONTROL(archive_path, XXWIDGETS_EDIT, archive);
     CONTROL(archive_browse, XXWIDGETS_BUTTON, "Browse...");
+    /* Created in on-screen order, which is also the Tab order. */
     CONTROL(output_label, XXWIDGETS_LABEL, "Output:");
     CONTROL(output_dir, XXWIDGETS_EDIT, output);
+    CONTROL(type_label, XXWIDGETS_LABEL, "File type:");
+    CONTROL(file_type, XXWIDGETS_COMBOBOX, "Binary");
     CONTROL(password_label, XXWIDGETS_LABEL, "Password:");
     CONTROL(password, XXWIDGETS_EDIT, "");
     CONTROL(get_password, XXWIDGETS_BUTTON, "Get password");
-    CONTROL(type_label, XXWIDGETS_LABEL, "File type:");
-    CONTROL(file_type, XXWIDGETS_COMBOBOX, "Binary");
-    CONTROL(compression_label, XXWIDGETS_LABEL, "WIM create:");
-    CONTROL(compression_method, XXWIDGETS_COMBOBOX, "XPRESS");
-    CONTROL(compression_level_label, XXWIDGETS_LABEL, "Level (0=default):");
-    CONTROL(compression_level, XXWIDGETS_EDIT, "0");
     CONTROL(open, XXWIDGETS_BUTTON, desktop_shell(ui) ? "Open" : "Open (l)");
     CONTROL(extract, XXWIDGETS_BUTTON, desktop_shell(ui) ? "Extract" : "Extract (x)");
     CONTROL(test, XXWIDGETS_BUTTON, desktop_shell(ui) ? "Test" : "Test (t)");
-    CONTROL(add, XXWIDGETS_BUTTON, desktop_shell(ui) ? "Add" : "Add (a)");
     CONTROL(cancel, XXWIDGETS_BUTTON, "Cancel");
     CONTROL(quit, XXWIDGETS_BUTTON, "Quit");
     CONTROL(members_label, XXWIDGETS_LABEL, "Archive members");
+    CONTROL(formats_button, XXWIDGETS_BUTTON, "File types...");
+    CONTROL(about_button, XXWIDGETS_BUTTON, "About...");
+    CONTROL(options, XXWIDGETS_BUTTON, "Options...");
+    CONTROL(advanced, XXWIDGETS_CHECKBOX, "Advanced");
     CONTROL(members, ui->backend == XXWIDGETS_BACKEND_NATIVE ? XXWIDGETS_ARCHIVEBROWSER : XXWIDGETS_ARCHIVEVIEW, "");
     CONTROL(metadata, XXWIDGETS_LABEL, "No member selected.");
-    CONTROL(advanced, XXWIDGETS_CHECKBOX, "Advanced");
     CONTROL(details, XXWIDGETS_LISTBOX, "");
-    CONTROL(options, XXWIDGETS_BUTTON, "Options...");
-    CONTROL(about_button, XXWIDGETS_BUTTON, "About...");
-    CONTROL(formats_button, XXWIDGETS_BUTTON, "File types...");
-    CONTROL(source_label, XXWIDGETS_LABEL, "Add file:");
-    CONTROL(source_path, XXWIDGETS_EDIT, "");
-    CONTROL(source_browse, XXWIDGETS_BUTTON, "Browse...");
-    CONTROL(queue_add, XXWIDGETS_BUTTON, "Queue");
-    CONTROL(queue_remove, XXWIDGETS_BUTTON, "Remove");
-    CONTROL(queue, XXWIDGETS_LISTBOX, "");
     CONTROL(progress, XXWIDGETS_PROGRESS, "");
     CONTROL(status, XXWIDGETS_LABEL, "Ready. Enter an archive path and select Open (l).");
     CONTROL(log_label, XXWIDGETS_LABEL, "Operation log");
     CONTROL(log, XXWIDGETS_LISTBOX, "");
-    CONTROL(help, XXWIDGETS_LABEL, "Tab: next control | Enter: activate | Arrows: select | Esc: quit");
+    /* Escape quits only the terminal edition; a desktop window closes normally. */
+    CONTROL(help, XXWIDGETS_LABEL, ui->backend == XXWIDGETS_BACKEND_NATIVE ?
+        "Tab: next control | Enter: activate | Arrows: select" :
+        "Tab: next control | Enter: activate | Arrows: select | Esc: quit");
     if (desktop_shell(ui)) {
         CONTROL(copy_path, XXWIDGETS_BUTTON, "Copy path");
         CONTROL(info, XXWIDGETS_BUTTON, "Info");
@@ -2231,17 +2298,6 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
     }
 #undef CONTROL
     {
-        const wchar_t *names[] = { L"Stored", L"XPRESS", L"LZX", L"LZMS" };
-        xx_meta_string records[4] = {0}; xx_str_w_s labels[4] = {0}; size_t i;
-        for (i = 0; i < 4; ++i) {
-            labels[i].data = (wchar_t *)names[i]; labels[i].length = wcslen(names[i]);
-            labels[i].capacity = labels[i].length + 1; labels[i].is_view = true;
-            records[i].meta_string = labels + i; records[i].var.type = XX_VAR_TYPE_UINT32; records[i].var.val.u32 = (uint32_t)i;
-        }
-        if (xxwidgets_combobox_set_records(ui->compression_method, records, 4) != XXWIDGETS_OK ||
-            xxwidgets_widget_set_value(ui->compression_method, 1) != XXWIDGETS_OK) return 0;
-    }
-    {
         ui_job initial = {0};
         initial.archive_path = ""; initial.file_types[0] = XX_FILE_TYPE_BINARY;
         initial.type_count = 1; initial.selected_type = XX_FILE_TYPE_BINARY;
@@ -2251,6 +2307,8 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
     if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER &&
         xxwidgets_archivebrowser_set_advanced(ui->members, ui->advanced_visible) != XXWIDGETS_OK) return 0;
     layout(ui, bounds.width, bounds.height);
+    ui->window_columns = bounds.width;
+    ui->window_rows = bounds.height;
 #ifdef _WIN32
     if (ui->backend == XXWIDGETS_BACKEND_NATIVE) {
         RECT client;
@@ -2302,15 +2360,14 @@ static const char ui_usage[] =
     "Commands (7-Zip letters):\n"
     "  x <archive> [-o<dir>]     Extract with full paths\n"
     "  l <archive>               List contents\n"
-    "  t <archive>               Test archive contents in memory\n"
-    "  a <archive> <file>...     Add files to a new archive\n\n"
+    "  t <archive>               Test archive contents in memory\n\n"
     "Without a command, an archive path opens its listing.\n"
     "-o<dir>: output directory for x (default: the current directory).\n"
     "-p<password>: initialize the editable Password field (-p for an empty password).\n"
     "Recovered passwords autofill unless edited; manual input is literal.\n"
     "Automatic values allow per-member recovery; explicit input overrides it.\n"
     "Password (escaped) displays controls/byte escapes while keeping the original credential.\n"
-    "Add writes .tar .tar.gz .tar.bz2 .tar.xz .tar.zst .tar.lz4 .zip .cpio .7z .gz .bz2 .xz .wim.\n"
+    "Opens existing archives only; create archives with: xfu a <archive> <file>...\n"
     "--help: show help. --smoke-test: hidden widget/backend lifecycle check.\n"
     "Tab navigates controls; Enter activates buttons; arrows select members.\n"
     "Cancel requests a safe stop, including while decoding a member.";
@@ -2418,7 +2475,7 @@ static VOID CALLBACK smoke_close_formats(HWND unused, UINT message, UINT_PTR tim
     edit = GetDlgItem(dialog, 101);
     length = GetWindowTextLengthW(edit);
     body = length > 0 ? (wchar_t *)calloc((size_t)length + 1, sizeof(*body)) : NULL;
-    expected = xfu_supported_types_text(&count);
+    expected = ui_supported_types_text(&count);
     EnumChildWindows(dialog, smoke_find_copy_button, (LPARAM)&copy);
     if (body && expected && GetWindowTextW(edit, body, length + 1)) {
         wchar_t *cursor;
@@ -2439,55 +2496,6 @@ static VOID CALLBACK smoke_close_formats(HWND unused, UINT message, UINT_PTR tim
 }
 #endif
 
-/* Included in both existing GUI and TUI lifecycle smoke tests. No worker or
- * filesystem operation is needed to prove that a job receives copied settings. */
-static int smoke_compression(ui_state *ui)
-{
-    xfu_request request = {0}; xx_var value = {0}; size_t i;
-    const char *invalid[] = {"", "101", "-1", "+1", "1x", "99999999999999999999"};
-    if (!ui->compression_method || xxwidgets_widget_kind(ui->compression_method) != XXWIDGETS_COMBOBOX ||
-        !ui->compression_level || xxwidgets_combobox_count(ui->compression_method) != 4 ||
-        xxwidgets_combobox_get_current(ui->compression_method, &value) != XXWIDGETS_OK ||
-        value.type != XX_VAR_TYPE_UINT32 || value.val.u32 != 1 ||
-        !compression_snapshot(ui, XFU_COMMAND_ADD, "case.WiM", &request, 0) ||
-        strcmp(request.compression_method, "xpress") || request.compression_level || !request.compression_level_set) return 0;
-    for (i = 0; i < 4; ++i) {
-        if (xxwidgets_widget_set_value(ui->compression_method, (int)i) != XXWIDGETS_OK ||
-            xxwidgets_widget_set_text(ui->compression_level, i ? "100" : "0") != XXWIDGETS_OK ||
-            !compression_snapshot(ui, XFU_COMMAND_ADD, "case.wim", &request, 0) ||
-            strcmp(request.compression_method, wim_methods[i]) || request.compression_level != (i ? 100 : 0)) return 0;
-    }
-    if (xxwidgets_widget_set_value(ui->compression_method, 0) != XXWIDGETS_OK ||
-        xxwidgets_widget_set_text(ui->compression_level, "1") != XXWIDGETS_OK ||
-        compression_snapshot(ui, XFU_COMMAND_ADD, "case.wim", &request, 0)) return 0;
-    if (xxwidgets_widget_set_value(ui->compression_method, 1) != XXWIDGETS_OK) return 0;
-    for (i = 0; i < sizeof(invalid)/sizeof(invalid[0]); ++i) {
-        if (xxwidgets_widget_set_text(ui->compression_level, invalid[i]) != XXWIDGETS_OK ||
-            compression_snapshot(ui, XFU_COMMAND_ADD, "case.wim", &request, 0) ||
-            !compression_snapshot(ui, XFU_COMMAND_LIST, "case.wim", &request, 0) ||
-            request.compression_method || request.compression_level_set ||
-            !compression_snapshot(ui, XFU_COMMAND_ADD, "case.zip", &request, 0) ||
-            request.compression_method || request.compression_level_set) return 0;
-    }
-    if (xxwidgets_widget_set_text(ui->archive_path, "UI-compression-smoke.wim") != XXWIDGETS_OK ||
-        xxwidgets_widget_set_text(ui->compression_level, "50") != XXWIDGETS_OK ||
-        !compression_snapshot(ui, XFU_COMMAND_ADD, "case.wim", &request, 0)) return 0;
-    /* Editing after a snapshot cannot change the pending job's method/level. */
-    if (xxwidgets_widget_set_value(ui->compression_method, 2) != XXWIDGETS_OK ||
-        xxwidgets_widget_set_text(ui->compression_level, "10") != XXWIDGETS_OK ||
-        strcmp(request.compression_method, "xpress") || request.compression_level != 50) return 0;
-    set_busy(ui, 1);
-#ifdef _WIN32
-    if (desktop_shell(ui) && (IsWindowEnabled((HWND)xxwidgets_widget_native_handle(ui->compression_method)) ||
-        IsWindowEnabled((HWND)xxwidgets_widget_native_handle(ui->compression_level)))) return 0;
-#endif
-    set_busy(ui, 0);
-    if (xxwidgets_widget_set_value(ui->compression_method, 1) != XXWIDGETS_OK ||
-        xxwidgets_widget_set_text(ui->compression_level, "0") != XXWIDGETS_OK ||
-        xxwidgets_widget_set_text(ui->archive_path, "") != XXWIDGETS_OK) return 0;
-    enable_compression(ui, 0); return 1;
-}
-
 static int smoke_widgets(ui_state *ui)
 {
     xxwidgets_archive_entry entries[] = {
@@ -2502,7 +2510,7 @@ static int smoke_widgets(ui_state *ui)
         !strcmp(escaped, "legacy-\\x82\\xFF-\\xC0\\xAF-\\xED\\xA0\\x80.txt") &&
         !strcmp(unicode, entries[2].path);
     free(escaped); free(unicode);
-    if (!valid_display || !smoke_compression(ui)) return 0;
+    if (!valid_display) return 0;
     if (xxwidgets_app_backend(ui->app) != ui->backend) return 0;
     {
         char *snapshot = NULL;
@@ -2851,8 +2859,6 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
     ui_state ui;
     const char *archive = "", *output = ".", *password = NULL;
     xfu_command startup = XFU_COMMAND_NONE;
-    const char **startup_files = NULL;
-    size_t startup_file_count = 0, file_index;
     int i, have_archive = 0, have_command = 0, end_options = 0;
     xxfc_status_t settings_load_status;
 #ifdef _WIN32
@@ -2869,13 +2875,11 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
             !strcmp(argv[i], "--smoke-password-embedded") || !strcmp(argv[i], "--smoke-password-manual") ||
             !strcmp(argv[i], "--smoke-password-retrieve") ||
             !strncmp(argv[i], "--smoke-progress-", 17)) ui.smoke = 1;
-    startup_files = (const char **)calloc((size_t)argc + 1, sizeof(*startup_files));
-    if (!startup_files) { if (!ui.smoke) report(backend, "Out of memory.", 1); return 2; }
     for (i = 1; i < argc; ++i) {
         const char *argument = argv[i];
         if (!end_options && !strcmp(argument, "--help")) {
             if (!ui.smoke) report(backend, ui_usage, 0);
-            free(startup_files); return 0;
+            return 0;
         }
         if (!end_options && !strcmp(argument, "--smoke-test")) { ui.smoke = 1; continue; }
         if (!end_options && !strcmp(argument, "--smoke-file-types")) {
@@ -2899,46 +2903,48 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
         if (!end_options && !strcmp(argument, "--")) { end_options = 1; continue; }
         if (!end_options && !strncmp(argument, "-o", 2) && argument[2]) { output = argument + 2; continue; }
         if (!end_options && !strncmp(argument, "-p", 2)) {
-            if (password) { free(startup_files); return 2; }
+            if (password) {
+                if (!ui.smoke) report(backend, "Give the password only once (-p<password>).", 1);
+                return 2;
+            }
             password = argument + 2; continue;
         }
         if (!end_options && argument[0] == '-') {
             if (!ui.smoke) report(backend, "Unknown option. Use --help for usage.", 1);
-            free(startup_files); return 2;
+            return 2;
         }
         if (!have_archive && !have_command && xfu_parse_command(argument) != XFU_COMMAND_NONE) {
-            startup = xfu_parse_command(argument); have_command = 1; continue;
+            startup = xfu_parse_command(argument); have_command = 1;
+            if (startup == XFU_COMMAND_ADD) {
+                if (!ui.smoke) report(backend, "XFileUnpacker opens existing archives only. "
+                    "Create archives with the console tool: xfu a <archive> <file>...", 1);
+                return 2;
+            }
+            continue;
         }
         if (!have_archive) { archive = argument; have_archive = 1; continue; }
-        if (startup == XFU_COMMAND_ADD) startup_files[startup_file_count++] = argument;
-        else {
-            if (!ui.smoke) report(backend, "Unexpected argument. Use --help for usage.", 1);
-            free(startup_files); return 2;
-        }
+        if (!ui.smoke) report(backend, "Unexpected argument. Use --help for usage.", 1);
+        return 2;
     }
     if (have_command && !have_archive) {
         if (!ui.smoke) report(backend, "A command requires an archive path.", 1);
-        free(startup_files); return 2;
-    }
-    if (startup == XFU_COMMAND_ADD && !startup_file_count) {
-        if (!ui.smoke) report(backend, "Add (a) requires at least one source file.", 1);
-        free(startup_files); return 2;
+        return 2;
     }
     if (have_archive && startup == XFU_COMMAND_NONE) startup = XFU_COMMAND_LIST;
     if (ui.type_smoke && (!have_archive || startup != XFU_COMMAND_LIST)) {
-        free(startup_files); return 2;
+        return 2;
     }
     if (ui.progress_smoke && (!have_archive || startup != XFU_COMMAND_EXTRACT)) {
-        free(startup_files); return 2;
+        return 2;
     }
     if (ui.password_smoke && (!have_archive || startup != XFU_COMMAND_LIST ||
                              (ui.password_smoke == 1 && password))) {
-        free(startup_files); return 2;
+        return 2;
     }
     ui.password_smoke_expected = password;
 #ifdef _WIN32
     if (ui.smoke && backend == XXWIDGETS_BACKEND_TUI && !smoke_console_create(&console)) {
-        smoke_console_destroy(&console); free(startup_files); return 2;
+        smoke_console_destroy(&console); return 2;
     }
 #endif
     ui.settings = ui.smoke ? xx_settings_create_memory() :
@@ -2972,10 +2978,8 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
         ui.exit_code = 2; goto cleanup;
     }
 #endif
-    for (file_index = 0; file_index < startup_file_count; ++file_index) {
-        if (!queue_path(&ui, startup_files[file_index])) { ui.exit_code = 2; goto cleanup; }
-    }
     ui.running = 1;
+    resize_terminal(&ui);
     if (ui.smoke && !have_archive) {
         ui.exit_code = smoke_widgets(&ui) ? 0 : 2;
         ui.running = 0;
@@ -3018,6 +3022,7 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
             xfu_command command = ui.pending_command;
             ui.pending_command = XFU_COMMAND_NONE;
             if (!start_job(&ui, command)) {
+                ui.busy_focus = NULL;
                 if (ui.smoke) { ui.exit_code = 2; ui.running = 0; }
             } else if (ui.password_smoke == 3 && ui.job && ui.job->retrieve_password) {
                 xxwidgets_event event = {0};
@@ -3042,20 +3047,43 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
             }
         }
         drain_job(&ui);
+#ifndef _WIN32
+        /* A modal dialog's own event handler swallows the main window's
+         * RESIZE; its new size in cells is still recorded, so check it here. */
+        resize_native(&ui);
+#endif
         if (ui.type_smoke) smoke_file_types(&ui);
-        if (ui.options_requested) { ui.options_requested = 0; show_options(&ui); }
-        if (ui.formats_requested) { ui.formats_requested = 0; show_supported_types(&ui); }
+        if (ui.browse_requested) {
+            ui.browse_requested = 0;
+            /* Choosing an archive opens it, as File > Open does on Windows. */
+            if (!ui.job && !ui.closing && browse_file(&ui, ui.archive_path))
+                ui.pending_command = XFU_COMMAND_LIST;
+            else {
+                ui.busy_focus = NULL;
+                if (!ui.smoke) xxwidgets_widget_focus(ui.archive_browse);
+            }
+        }
+        /* After a dialog, focus returns to the button that opened it. */
+        if (ui.options_requested) {
+            ui.options_requested = 0; show_options(&ui);
+            if (!ui.smoke) xxwidgets_widget_focus(ui.options);
+        }
+        if (ui.formats_requested) {
+            ui.formats_requested = 0; show_supported_types(&ui);
+            if (!ui.smoke) xxwidgets_widget_focus(ui.formats_button);
+        }
         if (ui.about_requested) {
             ui.about_requested = 0;
             if (xxwidgets_about_dialog_show(ui.about, ui.window) != XXWIDGETS_OK)
                 show_status(&ui, "Cannot show the About dialog.");
+            else if (!ui.smoke) xxwidgets_widget_focus(ui.about_button);
         }
     }
 cleanup:
-    free(startup_files);
     if (ui.job) { cancel_job(&ui); job_destroy(ui.job); }
     free_entries(ui.listed_entries, ui.listed_count);
     free(ui.file_types_path);
+    free(ui.members_archive);
     free(ui.pending_type_path);
     free(ui.password_archive);
     free(ui.password_listed_archive);
@@ -3064,8 +3092,6 @@ cleanup:
     free_password(ui.automatic_password);
     free_password(ui.automatic_password_display);
     ui.automatic_password = ui.automatic_password_display = NULL;
-    for (i = 0; (size_t)i < ui.queued_count; ++i) free(ui.queued_paths[i]);
-    free(ui.queued_paths);
 #ifdef _WIN32
     xfu_native_shell_destroy(ui.shell);
 #endif

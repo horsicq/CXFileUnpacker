@@ -325,17 +325,15 @@ The `a` command creates an archive and replaces an existing archive of a
 supported format. Writable formats are `.7z`, `.zip`, `.tar`, `.gz`, `.bz2`,
 `.xz`, `.wim`, `.tar.gz` / `.tgz`, `.tar.bz2` / `.tbz2`, `.tar.xz` / `.txz`,
 `.tar.zst`, `.tar.lz4`, and `.cpio`. Raw GZIP, BZIP2 and XZ streams require one
-input file. The password control and `-p` also protect newly created 7z/ZIP archives.
+input file. `-p` also protects newly created 7z/ZIP archives.
 WIM creation defaults to XPRESS compression. Select `--compression=stored`,
 `--compression=xpress`, `--compression=lzx` or `--compression=lzms`; optional
-`--compression-level=0..100` uses the compressor default at zero. GUI/TUI users
-select the method and level in **WIM create** controls before adding files.
+`--compression-level=0..100` uses the compressor default at zero.
 XPRESS/LZX produce WIM 1.13 and LZMS produces non-solid WIM 0.14. The separate
 wimlib compression runtime
 uses RAM chunks without temporary files. Stored creation and native reading
 work without that runtime; unavailable compression fails before an existing
-destination is truncated. These compression switches are console options;
-GUI/TUI startup uses their controls.
+destination is truncated. These compression switches are console options.
 The Windows x64 7-Zip engine, when supplied separately,
 provides all 60 readers in 7-Zip 26.03. Use `--reader sevenzip` for automatic
 engine selection, including embedded SFX archives, or select a named handler such
@@ -436,18 +434,16 @@ include all descendants. A right-click in empty space opens the archive menu.
 operations are disabled while another operation is running.
 
 **Extract** chooses a destination and extracts the entire archive. **Test**
-checks decoding without keeping output. **File > Create archive** chooses source files and a
-destination for a new archive; the save dialog confirms replacement of an
-existing file. **Copy path** copies the selected member name, **Info** shows
+checks decoding without keeping output. **Copy path** copies the selected member
+name, **Info** shows
 metadata, and **View > Operation log** toggles the operation log. A double-click
 on a file shows its information. **Tools > Cancel operation** requests
 cancellation of the active operation.
 
-The TUI and other desktop backends retain path fields: enter `Archive` and
-select `Open (l)`, then enter `Output` for `Extract (x)`. To create an archive,
-enter its future path, add files through `Add file` and `Queue`, and select
-`Add (a)`. `Remove` takes a selected file out of the queue. As with the original
-sample's `a` command, archive creation replaces an existing file.
+The TUI and other desktop backends retain path fields: enter `Archive` (or pick
+it with `Browse...` in the Linux GUI) and select `Open (l)`, then enter `Output`
+for `Extract (x)`. The GUI and TUI open existing archives only; create archives
+with the console `xfu a` command.
 
 In the TUI, use Tab / Shift+Tab to move between controls, Enter to activate
 buttons, and the arrow keys or PageUp / PageDown to navigate archive entries.
@@ -461,7 +457,7 @@ log messages, without changing the names used by
 readers during extraction.
 
 You can launch the GUI or TUI with an archive path to browse, or pass the same
-`x`, `l`, `t`, or `a` command and arguments accepted by the console version.
+`x`, `l`, or `t` command and arguments accepted by the console version.
 
 ## Keyboard shortcuts
 
@@ -471,7 +467,7 @@ entries use defaults; an empty value disables that action's shortcut. Builds
 copy the default file only when none exists, preserving local overrides. An
 invalid file or conflicting bindings falls back to the defaults.
 
-Default shortcuts include Ctrl+O (open), Ctrl+N (create archive), Ctrl+E
+Default shortcuts include Ctrl+O (open), Ctrl+E
 (extract), Ctrl+Shift+E (extract selected), Ctrl+T (test), Ctrl+Shift+C (copy
 path), Alt+Enter (information), Ctrl+L (log), Escape (cancel), Ctrl+Q (quit),
 Ctrl+Home (root), F5 (refresh), F1 (about), and Ctrl+Comma (options).

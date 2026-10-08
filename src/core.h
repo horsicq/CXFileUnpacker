@@ -59,6 +59,11 @@ typedef struct xfu_callbacks {
      * after all members have been processed, including failed members;
      * cancellation and premature iterator failure do not reach 100. */
     void (*test_progress)(void *user, unsigned percent);
+    /* LIST/TEST/EXTRACT, optional: called once when the member walk ends.
+     * complete is true when iteration reached the archive's end, so every
+     * member was read (some may still have failed); false after a cancel,
+     * the record limit, an iterator error or an incomplete archive. */
+    void (*walk_end)(void *user, bool complete);
 } xfu_callbacks;
 
 typedef struct xfu_request {
