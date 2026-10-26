@@ -8,9 +8,14 @@ The catalog covers detection and inspection; listing and extraction depend on th
 supported variant. Media readers may export encoded components. Flat list:
 `xfu --formats --color=never`.
 ZIP also covers OOXML, OpenDocument, EPUB and CBZ containers.
-The bundled Windows x64 7-Zip engine
-adds all 60 released 26.03 reader handlers and the numbered-split file type
-(ID 2603, `.001`). Creation is enabled for 7z, ZIP, TAR, GZIP, BZIP2, XZ and WIM.
+External 7-Zip engine handlers are disabled. Native 7z support and the
+in-process numbered-split reader remain available. Creation is enabled for 7z,
+ZIP, TAR, GZIP, BZIP2, XZ and stored WIM.
+The [archive capability matrix](ARCHIVE_FORMATS.md) covers native archive
+creation, supported variants and independent stream filters.
+The [PeaZip comparison](PEAZIP_FORMATS.md) covers xxfclib-backed readers,
+retained PEA/FreeArc/split creation, suffix aliases and the remaining format gaps.
+`xfu --capabilities` reports the compiled read/create operations.
 Extensions are conventional or documented filename suffixes; **—** means no suffix is established here.
 
 The [HxC additions](HXC_FORMATS.md) add 23 structured disk/track readers,
@@ -231,7 +236,7 @@ fall back to disk. `xfu t archive` shows aggregate percentages;
 | `GZ` | `.gz` | Gzip stream with compressed data and CRC-protected framing. |
 | `hp3000 wrq` | `.wrq` | WRQ labelled transfers exposing declared fixed-record HP 3000 host-file bytes. |
 | `KPCK` | `.kpck` | KolibriOS kpack wrapper holding one compressed payload. |
-| `LIF` | `.cmp` | The single-member "DC"/"DL" compressed-file container U3 calls LIF. |
+| `LIF` | `.cmp` | The single-member LIF compressed-file container with "DC"/"DL" signatures. |
 | `LIZARD` | `.lizard` | Decode every standard Lizard frame in the stream to a caller device. |
 | `LOGITECH COMPRESS` | — | Logitech Compress wrapper holding one compressed file. |
 | `LPAK` | `.cmp` | LPAK single-file LZSS stream with a declared plaintext size. |
@@ -1642,12 +1647,12 @@ codecs/encryption and UPX executable decompression are outside these additions.
 | 2211 | `SPACK` | `spack` | `.spk` | Decoded entries from PACKFI/index and authenticated HUNK SFX. |
 | 2212 | `PCOMPRESS_PACK` | `pcompress_pack` | `.pack` | Decoded PCompress PACK entries. |
 | 2213 | `BALZ` | `balz` | `.balz` | Native BALZ payload decoder, bounded input/output. |
-| 2214 | `QUAD` | `quad` | `.quad` | QUAD 1.12 payload decoder through helper; weak size-only header requires explicit selection or validated .quad extension. |
-| 2215 | `PAQ8` | `paq8` | `.paq8f`, `.paq8jd`, `.paq8l`, `.paq8o` | PAQ8F, PAQ8JD, PAQ8l and PAQ8O payload decoders through helper; unsupported revisions fail explicitly. |
+| 2214 | `QUAD` | `quad` | `.quad` | Format identification remains; payload decoding is unavailable because the helper process is disabled. Its weak size-only header still requires explicit selection or a validated `.quad` extension. |
+| 2215 | `PAQ8` | `paq8` | `.paq8f`, `.paq8jd`, `.paq8l`, `.paq8o` | Format identification remains; payload decoding is unavailable because the helper process is disabled. |
 | 2216 | `LRZIP` | `lrzip` | `.lrz` | LRZIP 0.6 stored/BZip2/LZO/LZMA/zlib chunks and links, CRC/MD5; encryption, ZPAQ and newer framing unsupported. |
-| 2217 | `GRZIP` | `grzip` | `.grz` | GRZipII framed blocks with header/data CRC and helper decompression. |
-| 2218 | `LPAQ1` | `lpaq1` | `.lpaq1` | LPAQ1 payload decoder through the bounded RAM helper. |
-| 2219 | `LPAQ5` | `lpaq5` | `.lpaq5` | LPAQ5 payload decoder through the bounded RAM helper. |
+| 2217 | `GRZIP` | `grzip` | `.grz` | Format identification remains; payload decoding is unavailable because the helper process is disabled. |
+| 2218 | `LPAQ1` | `lpaq1` | `.lpaq1` | Format identification remains; payload decoding is unavailable because the helper process is disabled. |
+| 2219 | `LPAQ5` | `lpaq5` | `.lpaq5` | Format identification remains; payload decoding is unavailable because the helper process is disabled. |
 | 2220 | `SAVAGE` | `savage` | `.svg` | Savage LH5 disk payload decoded to a 901120-byte ADF image with mandatory CRC16. |
 | 2221 | `MXM_SIMPLEARC` | `mxm_simplearc` | `.sfx` | Recognized Amiga HUNK producer stub, stored named files and bounded linked extents. |
 | 2222 | `SDS_SFX` | `sds_sfx` | `.sfx` | Recognized Amiga HUNK producer stub; DMS-medium literals/matches and each member's additive checksum. |
@@ -1693,28 +1698,28 @@ codecs/encryption and UPX executable decompression are outside these additions.
 | 2501 | `LVM2 physical volume` | `lvm2` | `.lvm` | Checksummed single-PV LVM2 metadata; multi-segment linear logical volumes. Missing PVs and unsupported segment types fail. |
 | 2502 | `COFF object file` | `coff_object` | `.obj` | COFF sections, symbol/string tables and long section names; bigobj unsupported. |
 | 2503 | `UEFI TE executable` | `te_executable` | `.te` | UEFI TE sections with stripped-header offset adjustment. |
-| 2520 | `AtheOS filesystem` | `atheos_fs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
-| 2521 | `BeOS filesystem` | `beos_fs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2520 | `AtheOS filesystem` | `atheos_fs` | `.img` | Filesystem identification/metadata only; member traversal and TEST require the disabled GRUB helper. |
+| 2521 | `BeOS filesystem` | `beos_fs` | `.img` | Filesystem identification/metadata only; member traversal and TEST require the disabled GRUB helper. |
 | 2522 | `Coherent UNIX filesystem` | `coherent_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2523 | `DEC Files-11 ODS-2` | `ods2_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2524 | `DEC RT-11 filesystem` | `rt11_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2525 | `ECMA-67 filesystem` | `ecma67_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
-| 2526 | `F2FS` | `f2fs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2526 | `F2FS` | `f2fs` | `.img` | Filesystem identification/metadata only; member traversal and TEST require the disabled GRUB helper. |
 | 2527 | `Plan 9 Fossil filesystem` | `fossil_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2528 | `HAMMER filesystem` | `hammer_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2529 | `HPOFS` | `hpofs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2530 | `HP Logical Interchange Format` | `hp_lif` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
-| 2531 | `Linux JFS` | `jfs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2531 | `Linux JFS` | `jfs` | `.img` | Filesystem identification/metadata only; member traversal and TEST require the disabled GRUB helper. |
 | 2532 | `Original Linux ext filesystem` | `linux_ext` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2533 | `Locus filesystem` | `locus_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2534 | `HPFS` | `hpfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2535 | `ReFS` | `refs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
-| 2536 | `NILFS2` | `nilfs2` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2536 | `NILFS2` | `nilfs2` | `.img` | Filesystem identification/metadata only; member traversal and TEST require the disabled GRUB helper. |
 | 2537 | `Amiga Professional File System` | `amiga_pfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2538 | `QNX4 filesystem` | `qnx4` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
-| 2539 | `Reiser filesystem` | `reiserfs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. ReiserFS 3.x files; Reiser4 provides superblock metadata only. |
+| 2539 | `Reiser filesystem` | `reiserfs` | `.img` | Filesystem identification/metadata only; member traversal and TEST require the disabled GRUB helper. Reiser4 provides superblock metadata only. |
 | 2540 | `SGI EFS` | `sgi_efs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
-| 2541 | `Amiga Smart File System` | `amiga_sfs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2541 | `Amiga Smart File System` | `amiga_sfs` | `.img` | Filesystem identification/metadata only; member traversal and TEST require the disabled GRUB helper. |
 | 2542 | `SolarOS filesystem` | `solar_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2543 | `UNICOS filesystem` | `unicos_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2544 | `UNIX System V filesystem` | `sysv_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
@@ -1724,7 +1729,7 @@ codecs/encryption and UPX executable decompression are outside these additions.
 | 2548 | `VMware VMFS` | `vmfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2549 | `Xenix filesystem` | `xenix_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2550 | `Xia filesystem` | `xia_fs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
-| 2551 | `XFS` | `xfs` | `.img` | Directory and file extraction through bundled read-only GRUB helper; TEST reads every listed file byte. |
+| 2551 | `XFS` | `xfs` | `.img` | Filesystem identification/metadata only; member traversal and TEST require the disabled GRUB helper. |
 | 2552 | `ZFS` | `zfs` | `.img` | Filesystem identity, geometry/label and superblock metadata only; no native filesystem-file traversal. |
 | 2553 | `GFS2` | `gfs2` | `.img` | Native GFS2 directories, stuffed/indirect/sparse/journaled data, hash leaves and regular file bytes within documented bounds. |
 | 2560 | `Acorn Linux / RISCiX partitions` | `acorn_partitions` | `.img` | Validated layout and bounded partition-image streams; contained filesystems are separate readers. |

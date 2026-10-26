@@ -11,13 +11,17 @@
 #include "metadata.h"
 #include "information.h"
 #include "supported_types.h"
+#include "xxfclib/formats/xx_format.h"
 #include "xxwidgets/xxwidgets_settings.h"
 #include "xxwidgets/xxwidgets_combobox.h"
 #include "xxwidgets/xxwidgets_process.h"
 #include "xxfclib/global/xx_settings_global.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,14 +71,32 @@ typedef struct ui_job {
     int smoke_progress_delay, smoke_progress_paused, smoke_progress_shown;
     char *logs[UI_PENDING_LOGS];
     size_t log_first, log_count;
+    size_t logs_dropped; /* Pending lines pushed out before the UI took them. */
+    uint64_t logs_drained_at; /* progress_clock() of the last drain in the dialog loop. */
     uint64_t completed, total;
     char *current_name;
     int progress_changed;
+    int not_archive; /* The input is not an archive (not_archive callback). */
+    xx_file_type_t not_archive_type;
+    int bar_percent; /* The main bar while the job runs (UI thread only). */
+    /* The status line while the job runs (UI thread only): the member the
+     * read path named last, whether it has counted members yet, and the
+     * percent of the bytes read that the line shows (-1: none); the member
+     * count it showed last, and since when (progress_clock). */
+    char *status_name;
+    int status_counted, status_percent;
+    uint64_t status_completed, status_since;
     xfu_entry *entries;
     size_t entry_count, entry_capacity;
-    xx_file_type_t file_types[XX_FILE_TYPE_CHAIN_MAX], selected_type;
+    /* The first member the folder view cannot show, escaped as the log
+     * escapes it (entries hold the member view's form; see populate_members). */
+    char *unsafe_name;
+    xx_handle_type_t *file_types, selected_type;
     size_t type_count;
     int have_file_types;
+    int types_published; /* Detected types the UI has not shown yet (under mutex). */
+    int encryption_detected;
+    xfu_encryption_status encryption_blocked; /* Coalesced under mutex. */
 } ui_job;
 
 typedef struct ui_state {
@@ -93,6 +115,10 @@ typedef struct ui_state {
     ui_job *job;
     xfu_entry *listed_entries;
     size_t listed_count;
+    /* Listed entry of each archive browser source index, or NULL when the
+     * browser holds every listed entry (see populate_members). */
+    size_t *browser_sources;
+    size_t browser_count;
     char *file_types_path, *pending_type_path;
     char *members_archive; /* Archive the members view lists, or NULL. */
     char *password_archive, *password_listed_archive;
@@ -102,14 +128,22 @@ typedef struct ui_state {
     uint64_t password_archive_revision;
     int retrieve_smoke_click;
     size_t retrieve_smoke_member;
-    xx_file_type_t selected_type;
-    size_t file_type_count; /* Entries in the File type list. */
+    xx_handle_type_t selected_type;
+    xx_handle_type_t startup_handle;
+    int startup_handle_pending;
+    size_t file_type_count; /* Entries in the Unpack list. */
+    xx_handle_type_t *offered_types; /* Dynamically sized unpack-handle list. */
+    int type_chosen; /* selected_type was picked from the list for file_types_path. */
+    int selected_not_archive; /* The last run read file_types_path as selected_type: no archive. */
+    xx_handle_type_t members_type; /* Type the members view was listed as. */
     xfu_command pending_command;
     int pending_extract_selected;
     int type_smoke, type_smoke_stage;
     int password_smoke, password_smoke_stage;
     const char *password_smoke_expected;
     int progress_smoke, progress_smoke_shown, progress_smoke_cancelled;
+    int archive_encrypted, encryption_smoke;
+    unsigned encryption_notices;
     uint64_t progress_smoke_started;
     int running, closing, smoke, exit_code, columns, rows, layout_ready, log_visible, busy, advanced_visible, options_requested, about_requested, formats_requested, browse_requested;
     xxwidgets_widget *busy_focus; /* Control that started the running operation. */
@@ -132,6 +166,21 @@ static int select_source_member(ui_state *ui, size_t source);
 static int finish_password_retrieval(ui_state *ui, const ui_job *job);
 static void smoke_retrieval_finished(ui_state *ui, const ui_job *job, int result);
 static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *user);
+static int browsable_path(const char *path, int is_directory);
+static int smoke_encryption(ui_state *ui);
+
+static void encryption_smoke_trace(const char *format, ...)
+{
+    char message[512];
+    const char *path = getenv("XFU_ENCRYPTION_SMOKE_LOG");
+    va_list arguments;
+    va_start(arguments, format); vsnprintf(message, sizeof(message), format, arguments); va_end(arguments);
+    fprintf(stderr, "Encryption UI smoke: %s\n", message); fflush(stderr);
+    if (path && path[0]) {
+        FILE *file = fopen(path, "ab");
+        if (file) { fprintf(file, "%s\n", message); fclose(file); }
+    }
+}
 
 static uint64_t progress_clock(void)
 {
@@ -189,6 +238,86 @@ static void free_password(char *text)
     }
 }
 
+/* Whether the well-formed UTF-8 sequence of count bytes at input is a format
+ * character (Unicode Cf: the bidirectional controls U+061C, U+200E, U+200F,
+ * U+202A-U+202E and U+2066-U+2069, U+00AD, U+200B, U+FEFF, the tags
+ * U+E0001 and U+E0020-U+E007F, those of an emoji flag too), a line or
+ * paragraph separator (U+2028, U+2029), or another code point that draws
+ * nothing (U+034F, the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0,
+ * U+17B4, U+17B5, and the unassigned default-ignorable ones): able to show a
+ * name reversed, on two lines, or the same as another. U+200C and U+200D
+ * stay: scripts and emoji need them; the variation selectors are
+ * hidden_selector's. As cli.c's. */
+static int format_control(const unsigned char *input, size_t count)
+{
+    static const unsigned long ranges[][2] = {
+        {0x00AD, 0x00AD}, {0x034F, 0x034F}, {0x0600, 0x0605}, {0x061C, 0x061C},
+        {0x06DD, 0x06DD}, {0x070F, 0x070F}, {0x0890, 0x0891}, {0x08E2, 0x08E2},
+        {0x115F, 0x1160}, {0x17B4, 0x17B5}, {0x180E, 0x180E}, {0x200B, 0x200B},
+        {0x200E, 0x200F}, {0x2028, 0x202E}, {0x2060, 0x206F}, {0x3164, 0x3164},
+        {0xFEFF, 0xFEFF}, {0xFFA0, 0xFFA0}, {0xFFF0, 0xFFFB}, {0x110BD, 0x110BD},
+        {0x110CD, 0x110CD}, {0x13430, 0x1343F}, {0x1BCA0, 0x1BCA3}, {0x1D173, 0x1D17A},
+        {0xE0000, 0xE00FF}, {0xE01F0, 0xE0FFF}};
+    unsigned long c;
+    size_t i;
+    if (count == 2) c = (unsigned long)(input[0] & 0x1f) << 6 | (input[1] & 0x3f);
+    else if (count == 3) c = (unsigned long)(input[0] & 0x0f) << 12 | (unsigned long)(input[1] & 0x3f) << 6 | (input[2] & 0x3f);
+    else if (count == 4) c = (unsigned long)(input[0] & 0x07) << 18 | (unsigned long)(input[1] & 0x3f) << 12 |
+                             (unsigned long)(input[2] & 0x3f) << 6 | (input[3] & 0x3f);
+    else return 0;
+    for (i = 0; i < sizeof(ranges) / sizeof(ranges[0]); ++i)
+        if (c >= ranges[i][0] && c <= ranges[i][1]) return 1;
+    return 0;
+}
+
+/* The code point of the well-formed UTF-8 sequence of count bytes at input. */
+static unsigned long code_point(const unsigned char *input, size_t count)
+{
+    if (count == 2) return (unsigned long)(input[0] & 0x1f) << 6 | (input[1] & 0x3f);
+    if (count == 3) return (unsigned long)(input[0] & 0x0f) << 12 | (unsigned long)(input[1] & 0x3f) << 6 | (input[2] & 0x3f);
+    if (count == 4) return (unsigned long)(input[0] & 0x07) << 18 | (unsigned long)(input[1] & 0x3f) << 12 |
+                           (unsigned long)(input[2] & 0x3f) << 6 | (input[3] & 0x3f);
+    return input[0];
+}
+
+/* Whether the well-formed UTF-8 sequence of count bytes at input, of
+ * remaining bytes, is a variation selector (U+FE00-U+FE0F, U+E0100-U+E01EF,
+ * the Mongolian U+180B-U+180D and U+180F) that draws nothing after previous,
+ * the code point before it (0 for none), and so could hide a difference. One
+ * stays only after a base it applies to: U+FE0E and U+FE0F after an emoji or
+ * a symbol with an emoji form, or between a keycap's 0-9, # or * and U+20E3;
+ * U+FE00-U+FE02 and U+E0100-U+E01EF after a CJK ideograph; the Mongolian ones
+ * after a Mongolian letter. As cli.c's. */
+static int hidden_selector(unsigned long previous, const unsigned char *input, size_t count, size_t remaining)
+{
+    static const unsigned long emoji[][2] = {
+        {0x00A9, 0x00A9}, {0x00AE, 0x00AE}, {0x203C, 0x203C}, {0x2049, 0x2049},
+        {0x2122, 0x2122}, {0x2139, 0x2139}, {0x2194, 0x2199}, {0x21A9, 0x21AA},
+        {0x231A, 0x231B}, {0x2328, 0x2328}, {0x23CF, 0x23CF}, {0x23E9, 0x23FA},
+        {0x24C2, 0x24C2}, {0x25AA, 0x25AB}, {0x25B6, 0x25B6}, {0x25C0, 0x25C0},
+        {0x25FB, 0x25FE}, {0x2600, 0x27BF}, {0x2934, 0x2935}, {0x2B05, 0x2B07},
+        {0x2B1B, 0x2B1C}, {0x2B50, 0x2B50}, {0x2B55, 0x2B55}, {0x3030, 0x3030},
+        {0x303D, 0x303D}, {0x3297, 0x3297}, {0x3299, 0x3299}, {0x1F000, 0x1FAFF}};
+    static const unsigned long ideographs[][2] = {
+        {0x3400, 0x4DBF}, {0x4E00, 0x9FFF}, {0xF900, 0xFAFF}, {0x20000, 0x3FFFF}};
+    unsigned long c = count >= 3 ? code_point(input, count) : 0;
+    size_t i;
+    if ((c >= 0x180B && c <= 0x180D) || c == 0x180F) return previous < 0x1820 || previous > 0x18AA;
+    if (c == 0xFE0E || c == 0xFE0F) {
+        if ((previous >= '0' && previous <= '9') || previous == '#' || previous == '*')
+            return remaining < 6 || input[3] != 0xe2 || input[4] != 0x83 || input[5] != 0xa3;
+        for (i = 0; i < sizeof(emoji) / sizeof(emoji[0]); ++i)
+            if (previous >= emoji[i][0] && previous <= emoji[i][1]) return 0;
+        return 1;
+    }
+    if ((c >= 0xFE00 && c <= 0xFE02) || (c >= 0xE0100 && c <= 0xE01EF)) {
+        for (i = 0; i < sizeof(ideographs) / sizeof(ideographs[0]); ++i)
+            if (previous >= ideographs[i][0] && previous <= ideographs[i][1]) return 0;
+        return 1;
+    }
+    return c >= 0xFE03 && c <= 0xFE0D;
+}
+
 /* Some legacy archives store byte names in an unspecified DOS code page.
  * Preserve Unicode text; show undecodable bytes visibly without guessing a
  * code page. Display names never feed back into extraction or source paths. */
@@ -197,6 +326,7 @@ static char *display_text_impl(const char *text, int member_path)
     const unsigned char *input = (const unsigned char *)(text ? text : "");
     const char hex[] = "0123456789ABCDEF";
     size_t remaining = strlen((const char *)input), position = 0;
+    unsigned long previous = 0;
     char *result;
     if (remaining > (SIZE_MAX - 1) / 4) return NULL;
     result = (char *)malloc(remaining * 4 + 1);
@@ -210,12 +340,19 @@ static char *display_text_impl(const char *text, int member_path)
         if (count > remaining) count = 0;
         for (i = 1; count && i < count; ++i)
             if ((input[i] & 0xc0) != 0x80) count = 0;
-        if (count > 1 && ((input[0] == 0xe0 && input[1] < 0xa0) ||
+        /* Overlong forms, surrogates, beyond U+10FFFF, and the C1 controls
+         * (U+0080-009F), which a terminal would act on. */
+        if (count > 1 && ((input[0] == 0xc2 && input[1] < 0xa0) ||
+            (input[0] == 0xe0 && input[1] < 0xa0) ||
             (input[0] == 0xed && input[1] >= 0xa0) ||
             (input[0] == 0xf0 && input[1] < 0x90) ||
             (input[0] == 0xf4 && input[1] >= 0x90))) count = 0;
+        /* Format controls and hidden variation selectors are escaped, each
+         * of their bytes like a control's. */
+        if (format_control(input, count) || hidden_selector(previous, input, count, remaining)) count = 0;
         if (count) {
             if (member_path == 2 && input[0] == '\\') result[position++] = '\\';
+            previous = code_point(input, count);
             memcpy(result + position, input, count);
             position += count; input += count; remaining -= count;
         } else {
@@ -230,11 +367,30 @@ static char *display_text_impl(const char *text, int member_path)
                 result[position++] = hex[input[0] >> 4];
                 result[position++] = hex[input[0] & 15];
             }
+            previous = 0;
             ++input; --remaining;
         }
     }
     result[position] = '\0';
     return result;
+}
+
+/* Whether text is well-formed UTF-8 (control characters allowed), as the
+ * text of a field must be. */
+static int utf8_text(const char *text)
+{
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        size_t count = *p < 0x80 ? 1 : *p >= 0xc2 && *p <= 0xdf ? 2 :
+            *p >= 0xe0 && *p <= 0xef ? 3 : *p >= 0xf0 && *p <= 0xf4 ? 4 : 0, i;
+        if (!count) return 0;
+        for (i = 1; i < count; ++i)
+            if ((p[i] & 0xc0) != 0x80) return 0;
+        if (count > 1 && ((p[0] == 0xe0 && p[1] < 0xa0) || (p[0] == 0xed && p[1] >= 0xa0) ||
+            (p[0] == 0xf0 && p[1] < 0x90) || (p[0] == 0xf4 && p[1] >= 0x90))) return 0;
+        p += count;
+    }
+    return 1;
 }
 
 static char *display_text(const char *text)
@@ -307,6 +463,7 @@ static void job_log(void *user, bool error, const char *line)
         free(job->logs[job->log_first]);
         job->log_first = (job->log_first + 1) % UI_PENDING_LOGS;
         --job->log_count;
+        ++job->logs_dropped;
     }
     position = (job->log_first + job->log_count) % UI_PENDING_LOGS;
     job->logs[position] = copy;
@@ -325,6 +482,9 @@ static void job_entry(void *user, const xfu_entry *entry)
     if (job->memory_error) return;
     name = display_member_text(entry->name);
     if (!name) { job->memory_error = 1; return; }
+    /* Without it (out of memory) the note names the member view's form. */
+    if (!job->unsafe_name && !browsable_path(entry->name, entry->is_directory))
+        job->unsafe_name = display_text(entry->name);
     if (entry->embedded_password) {
         password = copy_text(entry->embedded_password);
         if (!password) { free(name); job->memory_error = 1; return; }
@@ -354,25 +514,32 @@ static void job_entry(void *user, const xfu_entry *entry)
     job->entries[job->entry_count] = *entry;
     job->entries[job->entry_count].properties = properties;
     job->entries[job->entry_count].embedded_password = password;
+    job->entries[job->entry_count].failure = NULL; /* Borrowed: not kept. */
     job->entries[job->entry_count++].name = name;
 }
 
 static void job_progress(void *user, uint64_t completed, uint64_t total, const char *name)
 {
     ui_job *job = (ui_job *)user;
-    char *copy = display_text(name);
+    /* A call without a name (a read path counting between members, or a
+     * pass over the whole stream) keeps the member shown last. */
+    char *copy = name ? display_text(name) : NULL;
     /* Only the worker touches this monitor. Its observer publishes a copy. */
     if (job->overall_level >= 0) {
         xx_pd_record *record = &job->worker_progress.records[job->overall_level];
         record->total = total;
-        snprintf(record->status, sizeof(record->status), "%s", copy && copy[0] ? copy : "Archive members");
+        /* The end of a long name (the member) stays, cut at a whole character. */
+        if (name || !record->status[0])
+            xxwidgets_process_status_tail(record->status, sizeof(record->status), copy && copy[0] ? copy : "Archive members");
         xx_pd_set_current(&job->worker_progress, job->overall_level, completed);
     }
     mutex_lock(&job->mutex);
     job->completed = completed;
     job->total = total;
-    free(job->current_name);
-    job->current_name = copy;
+    if (name) {
+        free(job->current_name);
+        job->current_name = copy;
+    }
     job->progress_changed = 1;
     mutex_unlock(&job->mutex);
 }
@@ -387,20 +554,52 @@ static bool job_cancelled(void *user)
     return cancelled || job->memory_error;
 }
 
-static void job_file_types(void *user, const xx_file_type_t *types, size_t count,
-                           xx_file_type_t selected)
+static void job_unpack_handle_types(void *user, const xx_handle_type_t *types, size_t count,
+                                    xx_handle_type_t selected)
 {
     ui_job *job = (ui_job *)user;
-    if (count > XX_FILE_TYPE_CHAIN_MAX) { job->memory_error = 1; return; }
-    if (count) memcpy(job->file_types, types, count * sizeof(*types));
-    job->type_count = count;
-    job->selected_type = selected;
-    job->have_file_types = 1;
+    xx_handle_type_t *copy = NULL;
+    if (count > INT_MAX || count > SIZE_MAX / sizeof(*copy) || (count && !types)) {
+        mutex_lock(&job->mutex); job->memory_error = 1; mutex_unlock(&job->mutex); return;
+    }
+    if (count) {
+        copy = (xx_handle_type_t *)malloc(count * sizeof(*copy));
+        if (copy) memcpy(copy, types, count * sizeof(*copy));
+    }
+    mutex_lock(&job->mutex);
+    if (count && !copy) job->memory_error = 1;
+    else {
+        free(job->file_types); job->file_types = copy;
+        job->type_count = count;
+        job->selected_type = selected;
+        job->have_file_types = 1;
+        job->types_published = 1;
+    }
+    mutex_unlock(&job->mutex);
 }
 
 static void job_walk_end(void *user, bool complete)
 {
     ((ui_job *)user)->read_all = complete;
+}
+
+/* Read by the UI after the worker has been joined. */
+static void job_not_archive(void *user, xx_file_type_t type)
+{
+    ui_job *job = (ui_job *)user;
+    job->not_archive = 1;
+    job->not_archive_type = type;
+}
+
+static void job_encryption(void *user, xfu_encryption_status status, const char *member_name)
+{
+    ui_job *job = (ui_job *)user;
+    (void)member_name; /* One archive notice; no borrowed member string retained. */
+    mutex_lock(&job->mutex);
+    job->encryption_detected = 1;
+    if (status == XFU_ENCRYPTION_PASSWORD_REQUIRED || status == XFU_ENCRYPTION_PASSWORD_REJECTED)
+        job->encryption_blocked = status;
+    mutex_unlock(&job->mutex);
 }
 
 static bool job_observe_progress(const xx_pd_struct *progress, void *user)
@@ -439,6 +638,67 @@ static bool job_observe_progress(const xx_pd_struct *progress, void *user)
     return job->worker_stopped != 0;
 }
 
+static int populate_file_types(ui_state *ui, const ui_job *job);
+static void keep_offered_types(const ui_state *ui, ui_job *job);
+static void append_log_line(ui_state *ui, const char *line);
+
+/* Moves the worker's pending log lines into the Operation log, from the main
+ * loop and from the progress dialog's (Extract runs there); lines it had to
+ * push out first are counted, not lost silently. Read the job's done flag
+ * before this: once it is set, every line is already pending. */
+static void drain_logs(ui_state *ui, ui_job *job)
+{
+    char *lines[UI_PENDING_LOGS];
+    size_t i, count, dropped;
+    mutex_lock(&job->mutex);
+    count = job->log_count;
+    for (i = 0; i < count; ++i)
+        lines[i] = job->logs[(job->log_first + i) % UI_PENDING_LOGS];
+    job->log_first = job->log_count = 0;
+    dropped = job->logs_dropped;
+    job->logs_dropped = 0;
+    mutex_unlock(&job->mutex);
+    if (dropped) {
+        char notice[96];
+        snprintf(notice, sizeof(notice), "%zu log line(s) not shown (logged faster than displayed).", dropped);
+        append_log_line(ui, notice);
+    }
+    for (i = 0; i < count; ++i) { append_log_line(ui, lines[i]); free(lines[i]); }
+    /* The newest line selected once, not after every line. */
+    if (dropped || count) xxwidgets_widget_set_value(ui->log, (int)xxwidgets_listbox_count(ui->log) - 1);
+}
+
+/* The file types the worker detected, shown while the job still runs instead
+ * of the placeholder; the end of the job shows them again (a password
+ * retrieval only then). */
+static void show_detected_types(ui_state *ui, ui_job *job)
+{
+    ui_job detected = {0};
+    int published;
+    mutex_lock(&job->mutex);
+    published = job->types_published;
+    if (published && job->type_count) {
+        detected.file_types = (xx_handle_type_t *)malloc(job->type_count * sizeof(*detected.file_types));
+        if (!detected.file_types) { job->memory_error = 1; published = 0; }
+        else memcpy(detected.file_types, job->file_types, job->type_count * sizeof(*detected.file_types));
+    }
+    if (published) {
+        detected.type_count = job->type_count;
+        detected.selected_type = job->selected_type;
+    }
+    job->types_published = 0;
+    mutex_unlock(&job->mutex);
+    if (published && !job->retrieve_password) {
+        detected.archive_path = job->archive_path;
+        detected.request.handle_type = job->request.handle_type;
+        keep_offered_types(ui, &detected);
+        if (detected.memory_error || !populate_file_types(ui, &detected)) {
+            mutex_lock(&job->mutex); job->memory_error = 1; mutex_unlock(&job->mutex);
+        }
+    }
+    free(detected.file_types);
+}
+
 static xxwidgets_status job_dialog_update(void *user, int stop,
     xx_pd_struct *progress, int *finished)
 {
@@ -450,6 +710,15 @@ static xxwidgets_status job_dialog_update(void *user, int stop,
     progress->is_stop = progress->is_stop || job->cancel_requested;
     *finished = job->done;
     mutex_unlock(&job->mutex);
+    /* Extract runs inside this dialog's loop, where drain_job does not: a few
+     * times a second, as each line costs a row in the toolkit's list, and a
+     * fast job would keep the UI thread busy; lines pushed out meanwhile are
+     * counted. drain_job takes the rest when the job ends. */
+    if (progress_clock() - job->logs_drained_at >= 250) {
+        drain_logs(ui, job);
+        job->logs_drained_at = progress_clock();
+    }
+    show_detected_types(ui, job);
     if (ui->progress_smoke && !drive_progress_smoke(ui)) return XXWIDGETS_PLATFORM_ERROR;
     return XXWIDGETS_OK;
 }
@@ -462,8 +731,12 @@ static void *job_worker(void *parameter)
 {
     ui_job *job = (ui_job *)parameter;
     xx_pd_observer previous = xx_pd_set_observer(&job->worker_progress, job_observe_progress, job);
-    int result;
-    job->overall_level = xx_pd_enter_level(&job->worker_progress, 0, command_name(job->request.command));
+    int result, level;
+    level = xx_pd_enter_level(&job->worker_progress, 0, command_name(job->request.command));
+    /* Under the lock: the UI reads it with the snapshots (stream_permille). */
+    mutex_lock(&job->mutex);
+    job->overall_level = level;
+    mutex_unlock(&job->mutex);
     result = xfu_run(&job->request);
     if (job->memory_error) {
         job_log(job, true, "Out of memory while collecting archive members.");
@@ -501,11 +774,14 @@ static void job_destroy(ui_job *job)
     if (!job) return;
     job_join(job);
     free(job->selected_records);
+    free(job->file_types);
     free(job->archive_path);
     free(job->output_dir);
     free_password(job->password);
     free(job->retrieve_member_name);
     free(job->current_name);
+    free(job->status_name);
+    free(job->unsafe_name);
     for (i = 0; i < job->log_count; ++i)
         free(job->logs[(job->log_first + i) % UI_PENDING_LOGS]);
     free_entries(job->entries, job->entry_count);
@@ -528,7 +804,53 @@ static char *widget_text(xxwidgets_widget *widget)
 
 static void show_status(ui_state *ui, const char *message)
 {
-    xxwidgets_widget_set_text(ui->status, message);
+    char *marked;
+    if (!ui->archive_encrypted) { xxwidgets_widget_set_text(ui->status, message); return; }
+    marked = (char *)malloc(strlen(message) + 13);
+    if (!marked) return;
+    sprintf(marked, "[Encrypted] %s", message);
+    xxwidgets_widget_set_text(ui->status, marked);
+    free(marked);
+}
+
+static void set_encryption_marker(ui_state *ui, int encrypted)
+{
+    ui->archive_encrypted = encrypted;
+    xxwidgets_widget_set_text(ui->members_label, encrypted ? "Archive members (encrypted)" : "Archive members");
+}
+
+/* Called only on the UI thread after the worker and its progress dialog have
+ * finished. The existing editor remains the sole password input; no retry is
+ * started implicitly and hundreds of encrypted members produce one notice. */
+static int show_encryption_notice(ui_state *ui, xfu_encryption_status status)
+{
+    const char *message = status == XFU_ENCRYPTION_PASSWORD_REJECTED ?
+        "This archive contains encrypted files. The supplied password could not unlock the archive or selected files.\n\n"
+        "Check the password in the Password field, then try again. Damaged encrypted data can also cause this failure." :
+        status == XFU_ENCRYPTION_PASSWORD_REQUIRED ?
+        "This archive is encrypted. A password is required to open the archive or selected files.\n\n"
+        "Enter the password in the Password field, then try the operation again." :
+        "Files in this archive are encrypted.\n\n"
+        "Enter a password in the Password field before testing or extracting them.";
+    int okay = 1;
+    if (ui->closing) return 1;
+    if (ui->encryption_smoke) encryption_smoke_trace("opening notice status=%d native=%d job=%p busy=%d", (int)status, desktop_shell(ui), (void *)ui->job, ui->busy);
+    ++ui->encryption_notices;
+#ifdef _WIN32
+    if (desktop_shell(ui)) {
+        wchar_t wide[1024];
+        if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, message, -1, wide, 1024)) okay = 0;
+        else {
+            okay = MessageBoxW((HWND)xxwidgets_widget_native_handle(ui->window), wide,
+                L"Encrypted archive", MB_OK | MB_ICONINFORMATION) != 0;
+        }
+    } else
+#endif
+        okay = xxwidgets_text_dialog(ui->window, "Encrypted archive", message) == XXWIDGETS_OK;
+    if (!okay) show_status(ui, "Encrypted archive: enter a password; the notice could not be displayed.");
+    if (!ui->closing && xxwidgets_widget_focus(ui->password) != XXWIDGETS_OK) okay = 0;
+    if (ui->encryption_smoke) encryption_smoke_trace("notice returned okay=%d focus=%d", okay, xxwidgets_widget_has_focus(ui->password));
+    return okay;
 }
 
 /* A single-line editor cannot preserve embedded controls. Keep the raw
@@ -587,6 +909,9 @@ static int password_archive_changed(ui_state *ui, const char *archive)
     if (!set_automatic_password(ui, NULL)) { free(path); return 0; }
     free(ui->password_archive); ui->password_archive = path;
     free(ui->password_listed_archive); ui->password_listed_archive = NULL;
+    set_encryption_marker(ui, 0);
+    show_status(ui, "Ready.");
+    xxwidgets_widget_set_text(ui->metadata, "No member selected.");
     ++ui->password_archive_revision;
     return 1;
 }
@@ -637,14 +962,26 @@ static int autofill_listing_password(ui_state *ui, const ui_job *job)
     return 1;
 }
 
-static void append_log(ui_state *ui, const char *line)
+/* Adds a line, keeping the display limit; the caller selects the newest. */
+static void append_log_line(ui_state *ui, const char *line)
 {
     if (xxwidgets_listbox_count(ui->log) >= UI_DISPLAY_LOGS) {
         xxwidgets_listbox_clear(ui->log);
         xxwidgets_listbox_add(ui->log, "Earlier log lines discarded (1000-line display limit).");
     }
     xxwidgets_listbox_add(ui->log, line);
+}
+
+static void append_log(ui_state *ui, const char *line)
+{
+    append_log_line(ui, line);
     xxwidgets_widget_set_value(ui->log, (int)xxwidgets_listbox_count(ui->log) - 1);
+}
+
+/* Extract and Test require a detected unpack handle and a usable reader. */
+static int archive_actions(const ui_state *ui)
+{
+    return ui->file_type_count && ui->selected_type != XX_HANDLE_TYPE_UNKNOWN && !ui->selected_not_archive;
 }
 
 static void set_busy(ui_state *ui, int busy)
@@ -664,9 +1001,9 @@ static void set_busy(ui_state *ui, int busy)
     if (busy) xxwidgets_widget_set_enabled(ui->cancel, 1);
     for (i = 0; i < sizeof(controls) / sizeof(controls[0]); ++i)
         xxwidgets_widget_set_enabled(controls[i], !busy);
-    xxwidgets_widget_set_enabled(ui->file_type, !busy);
-    xxwidgets_widget_set_enabled(ui->extract, !busy && ui->selected_type != XX_FILE_TYPE_BINARY);
-    xxwidgets_widget_set_enabled(ui->test, !busy && ui->selected_type != XX_FILE_TYPE_BINARY);
+    xxwidgets_widget_set_enabled(ui->file_type, !busy && ui->file_type_count != 0);
+    xxwidgets_widget_set_enabled(ui->extract, !busy && archive_actions(ui));
+    xxwidgets_widget_set_enabled(ui->test, !busy && archive_actions(ui));
     /* Asked before Cancel is disabled, which moves focus off it. -1: unknown. */
     if (!busy) cancel_focused = xxwidgets_widget_has_focus(ui->cancel);
     if (!busy) xxwidgets_widget_set_enabled(ui->cancel, 0);
@@ -683,7 +1020,7 @@ static void set_busy(ui_state *ui, int busy)
     }
 #ifdef _WIN32
     xfu_native_shell_set_busy(ui->shell, busy);
-    xfu_native_shell_set_archive_enabled(ui->shell, ui->selected_type != XX_FILE_TYPE_BINARY);
+    xfu_native_shell_set_archive_enabled(ui->shell, archive_actions(ui));
 #endif
     if (desktop_shell(ui) && ui->layout_ready) layout(ui, ui->columns, ui->rows);
 }
@@ -703,6 +1040,7 @@ static void update_details(ui_state *ui, size_t index)
     size_t i;
     xxwidgets_listbox_clear(ui->details);
     if (!ui->advanced_visible || index >= ui->listed_count) return;
+    if (ui->listed_entries[index].is_encrypted) xxwidgets_listbox_add(ui->details, "Encryption: Encrypted");
     for (i = 0; i < ui->listed_entries[index].property_count; ++i) {
         const xfu_property *property = &ui->listed_entries[index].properties[i];
         size_t length = strlen(property->name) + strlen(property->value) + 3;
@@ -711,6 +1049,14 @@ static void update_details(ui_state *ui, size_t index)
         snprintf(line, length, "%s: %s", property->name, property->value);
         xxwidgets_listbox_add(ui->details, line); free(line);
     }
+}
+
+/* The listed entry an archive browser source index stands for: the browser
+ * holds only the members it can show. SIZE_MAX for none. */
+static size_t browser_listed(const ui_state *ui, size_t source)
+{
+    if (!ui->browser_sources || source == SIZE_MAX) return source;
+    return source < ui->browser_count ? ui->browser_sources[source] : SIZE_MAX;
 }
 
 static void update_metadata(ui_state *ui)
@@ -722,7 +1068,7 @@ static void update_metadata(ui_state *ui)
     if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER) {
         xxwidgets_archive_browser_entry member;
         size_t selected_count = xxwidgets_archivebrowser_selection_count(ui->members);
-        char size[40] = "", packed[40] = "";
+        char size[40] = "unknown", packed[40] = "unknown";
         if (xxwidgets_archivebrowser_get_selection(ui->members, &index, &member) != XXWIDGETS_OK || !member.path) {
             char count[80];
             snprintf(count, sizeof(count), "0 / %zu object(s) selected", xxwidgets_archivebrowser_visible_count(ui->members));
@@ -730,13 +1076,15 @@ static void update_metadata(ui_state *ui)
             update_details(ui, SIZE_MAX);
             return;
         }
+        index = browser_listed(ui, index);
         autofill_selected_password(ui, index);
         if (member.flags & XXWIDGETS_ARCHIVE_SIZE_KNOWN) snprintf(size, sizeof(size), "%" PRIu64, member.size);
         if (member.flags & XXWIDGETS_ARCHIVE_PACKED_SIZE_KNOWN) snprintf(packed, sizeof(packed), "%" PRIu64, member.packed_size);
         capacity = strlen(member.path) + 180;
         message = (char *)malloc(capacity);
         if (!message) return;
-        snprintf(message, capacity, "%zu / %zu object(s) selected | %s | %s%s%s%s",
+        snprintf(message, capacity, "%s%zu / %zu object(s) selected | %s | %s%s%s%s",
+            index < ui->listed_count && ui->listed_entries[index].is_encrypted ? "Encrypted | " : "",
             selected_count, xxwidgets_archivebrowser_visible_count(ui->members), member.path,
             member.is_directory ? "Folder" : "Size: ", member.is_directory ? "" : size,
             member.is_directory ? "" : "; packed: ", member.is_directory ? "" : packed);
@@ -762,8 +1110,9 @@ static void update_metadata(ui_state *ui)
         else snprintf(packed, sizeof(packed), "%" PRId64, details->packed_size);
         if (details->unpacked_size < 0) strcpy(unpacked, "unknown");
         else snprintf(unpacked, sizeof(unpacked), "%" PRId64, details->unpacked_size);
-        snprintf(message, capacity, "%s | %s | packed: %s; size: %s bytes",
-                 details->name, details->is_directory ? "directory" : "file", packed, unpacked);
+        snprintf(message, capacity, "%s%s | %s | packed: %s; size: %s bytes",
+                 details->is_encrypted ? "Encrypted | " : "", details->name,
+                 details->is_directory ? "directory" : "file", packed, unpacked);
     } else {
         snprintf(message, capacity, "%s | %s | %" PRIu64 " bytes", entry.path,
                  entry.is_directory ? "directory" : "file", entry.size);
@@ -790,8 +1139,10 @@ static int apply_advanced(ui_state *ui, int checked)
 static char *ui_supported_types_text(size_t *count)
 {
     static const char note[] =
-        "This window opens, tests and extracts existing archives. Creating archives and the --reader "
-        "options below are console features: xfu a <archive> <file>..., xfu <command> <archive> --reader <name>\n\n";
+        "This window opens, tests and extracts existing archives.\n"
+        "Creating archives and the --reader options below need xfu:\n"
+        "  xfu a <archive> <file>...\n"
+        "  xfu <command> <archive> --reader <name>\n\n";
     char *text = xfu_supported_types_text(count), *joined;
     size_t prefix = sizeof(note) - 1, length;
     if (!text) return NULL;
@@ -842,52 +1193,134 @@ static void change_advanced(ui_state *ui, int checked)
     }
 }
 
-static const char *file_type_label(xx_file_type_t type)
-{
-    switch (type) {
-    case XX_FILE_TYPE_BINARY: return "Binary";
-    case XX_FILE_TYPE_GZ: return "gzip";
-    case XX_FILE_TYPE_BZ2: return "bzip2";
-    case XX_FILE_TYPE_XZ: return "xz";
-    case XX_FILE_TYPE_TAR: return "tar";
-    case XX_FILE_TYPE_TAR_GZ: return "tar.gz";
-    case XX_FILE_TYPE_TAR_BZ2: return "tar.bz2";
-    case XX_FILE_TYPE_TAR_XZ: return "tar.xz";
-    case XX_FILE_TYPE_TAR_ZSTD: return "tar.zst";
-    default: return xx_format_file_type_to_string(type);
+/* Handle names are case-insensitive; punctuation separates words only.
+ * Thus TAR_GZ and tar.gz name the same unpack operation. Numeric IDs must
+ * belong to the unpack-handle catalog, never the file-inspection enum. */
+static int handle_name_equal(const char *left, const char *right) {
+    for (;;) {
+        unsigned char a, b;
+        while (*left && !((*left >= '0' && *left <= '9') || (*left >= 'A' && *left <= 'Z') || (*left >= 'a' && *left <= 'z'))) ++left;
+        while (*right && !((*right >= '0' && *right <= '9') || (*right >= 'A' && *right <= 'Z') || (*right >= 'a' && *right <= 'z'))) ++right;
+        a = (unsigned char)*left; b = (unsigned char)*right;
+        if (a >= 'A' && a <= 'Z') a = (unsigned char)(a + 'a' - 'A');
+        if (b >= 'A' && b <= 'Z') b = (unsigned char)(b + 'a' - 'A');
+        if (a != b) return 0;
+        if (!a) return 1;
+        ++left; ++right;
     }
+}
+
+static int parse_unpack_handle(const char *name, xx_handle_type_t *handle) {
+    xx_list_t *supported;
+    size_t i;
+    unsigned long numeric = 0;
+    int is_numeric = 0, found = 0;
+    char *end;
+    if (!name || !*name) return 0;
+    if (strlen(name) >= 15) {
+        char prefix[16];
+        memcpy(prefix, name, 15); prefix[15] = 0;
+        if (handle_name_equal(prefix, "XX_HANDLE_TYPE_")) name += 15;
+    }
+    if (handle_name_equal(name, "auto") || handle_name_equal(name, "automatic")) {
+        *handle = XX_HANDLE_TYPE_UNKNOWN; return 1;
+    }
+    if (handle_name_equal(name, "gzip")) name = "gz";
+    else if (handle_name_equal(name, "bzip2")) name = "bz2";
+    else if (handle_name_equal(name, "tar.zst")) name = "tar.zstd";
+    if (*name >= '0' && *name <= '9') {
+        errno = 0; numeric = strtoul(name, &end, 10);
+        /* 7ZIP is a name, not a malformed numeric ID. */
+        if (!*end) {
+            if (errno || numeric > UINT32_MAX) return 0;
+            if (!numeric) { *handle = XX_HANDLE_TYPE_UNKNOWN; return 1; }
+            is_numeric = 1;
+        }
+    }
+    supported = xx_format_get_supported_unpack_handle_types();
+    if (!supported) return 0;
+    for (i = 0; i < xx_list_count(supported); ++i) {
+        xx_handle_type_t candidate = *(const xx_handle_type_t *)xx_list_at(supported, i);
+        if ((is_numeric && numeric == (unsigned long)candidate) ||
+            (!is_numeric && handle_name_equal(name, xx_format_handle_type_to_string(candidate)))) {
+            *handle = candidate; found = 1; break;
+        }
+    }
+    xx_list_destroy(supported);
+    return found;
+}
+
+
+static const char *unpack_handle_label(xx_handle_type_t type)
+{
+    return type == XX_HANDLE_TYPE_UNKNOWN ? "Automatic" : xx_format_handle_type_to_string(type);
 }
 
 static int populate_file_types(ui_state *ui, const ui_job *job)
 {
-    xx_meta_string records[XX_FILE_TYPE_CHAIN_MAX] = {0};
-    xx_str_w_s labels[XX_FILE_TYPE_CHAIN_MAX] = {0};
-    char *path;
-    size_t i, selected;
-    int result = 0;
-    if (!job->type_count || job->type_count > XX_FILE_TYPE_CHAIN_MAX) return 0;
+    xx_meta_string *records = NULL;
+    xx_str_w_s *labels = NULL;
+    xx_handle_type_t *offered = NULL;
+    char *path = NULL;
+    size_t i, selected = 0, displayed = job->type_count ? job->type_count : 1;
+    int result = 0, found = 0;
+    if (displayed > INT_MAX || displayed > SIZE_MAX / sizeof(*records) ||
+        displayed > SIZE_MAX / sizeof(*labels) || job->type_count > SIZE_MAX / sizeof(*offered)) return 0;
+    records = (xx_meta_string *)calloc(displayed, sizeof(*records));
+    labels = (xx_str_w_s *)calloc(displayed, sizeof(*labels));
     path = copy_text(job->archive_path);
-    if (!path) return 0;
-    selected = job->type_count - 1;
-    for (i = 0; i < job->type_count; ++i) {
-        labels[i].data = xx_str_utf8_to_unicode(file_type_label(job->file_types[i]));
+    if (job->type_count) offered = (xx_handle_type_t *)malloc(job->type_count * sizeof(*offered));
+    if (!records || !labels || !path || (job->type_count && !offered)) goto done;
+    if (job->type_count) {
+        memcpy(offered, job->file_types, job->type_count * sizeof(*offered));
+        selected = job->type_count - 1;
+    }
+    for (i = 0; i < displayed; ++i) {
+        xx_handle_type_t type = job->type_count ? job->file_types[i] : XX_HANDLE_TYPE_UNKNOWN;
+        const char *label = !job->type_count && job->archive_path[0] ? "No unpacker" : unpack_handle_label(type);
+        labels[i].data = xx_str_utf8_to_unicode(label);
         if (!labels[i].data) goto done;
         labels[i].length = wcslen(labels[i].data);
         labels[i].capacity = labels[i].length + 1; labels[i].is_view = true;
         records[i].meta_string = labels + i;
         records[i].var.type = XX_VAR_TYPE_UINT32;
-        records[i].var.val.u32 = (uint32_t)job->file_types[i];
-        if (job->file_types[i] == job->selected_type) selected = i;
+        records[i].var.val.u32 = (uint32_t)type;
+        if (type == job->selected_type) { selected = i; found = 1; }
     }
-    if (xxwidgets_combobox_set_records(ui->file_type, records, job->type_count) != XXWIDGETS_OK ||
+    if (xxwidgets_combobox_set_records(ui->file_type, records, displayed) != XXWIDGETS_OK ||
         xxwidgets_widget_set_value(ui->file_type, (int)selected) != XXWIDGETS_OK) goto done;
     free(ui->file_types_path); ui->file_types_path = path; path = NULL;
-    ui->selected_type = job->file_types[selected];
+    ui->selected_type = job->type_count ? job->file_types[selected] : XX_HANDLE_TYPE_UNKNOWN;
     ui->file_type_count = job->type_count;
+    free(ui->offered_types); ui->offered_types = offered; offered = NULL;
+    ui->selected_not_archive = 0;
+    if (!job->type_count || !found) ui->type_chosen = 0;
+    xxwidgets_widget_set_enabled(ui->file_type, !ui->busy && ui->file_type_count != 0);
     result = 1;
 done:
-    for (i = 0; i < job->type_count; ++i) xx_str_wfree(labels[i].data);
-    free(path); return result;
+    if (labels) for (i = 0; i < displayed; ++i) xx_str_wfree(labels[i].data);
+    free(records); free(labels); free(offered); free(path); return result;
+}
+
+/* Whether the archive browser can show a member path. It refuses a '..'
+ * component and a file without a name, and with one such path the whole
+ * listing; extraction refuses those members anyway. */
+static int browsable_path(const char *path, int is_directory)
+{
+    const char *cursor = path;
+    int named = 0;
+    if (!path || !path[0]) return 0;
+    while (*cursor) {
+        const char *start;
+        size_t length;
+        while (*cursor == '/' || *cursor == '\\') ++cursor;
+        start = cursor;
+        while (*cursor && *cursor != '/' && *cursor != '\\') ++cursor;
+        length = (size_t)(cursor - start);
+        if (length == 2 && start[0] == '.' && start[1] == '.') return 0;
+        if (length && (length != 1 || start[0] != '.')) named = 1;
+    }
+    return named || is_directory;
 }
 
 static int populate_members(ui_state *ui, ui_job *job)
@@ -897,56 +1330,115 @@ static int populate_members(ui_state *ui, ui_job *job)
     size_t i;
     if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER) {
         xxwidgets_archive_browser_entry *members = NULL;
+        size_t *sources = NULL, shown = 0, hidden = 0;
+        char *note = NULL;
         if (job->entry_count) {
             members = (xxwidgets_archive_browser_entry *)calloc(job->entry_count, sizeof(*members));
-            if (!members) return 0;
+            sources = (size_t *)malloc(job->entry_count * sizeof(*sources));
+            if (!members || !sources) { free(members); free(sources); return 0; }
         }
         for (i = 0; i < job->entry_count; ++i) {
-            members[i].path = job->entries[i].name;
-            members[i].is_directory = job->entries[i].is_directory;
+            xxwidgets_archive_browser_entry *member = &members[shown];
+            if (!browsable_path(job->entries[i].name, job->entries[i].is_directory)) {
+                /* One note names the first, escaped as the log is; the
+                 * members stay listed. */
+                if (!hidden++) {
+                    const char *name = job->unsafe_name ? job->unsafe_name : job->entries[i].name;
+                    size_t length = strlen(name) + 96;
+                    note = (char *)malloc(length);
+                    if (note) snprintf(note, length, "Unsafe member path, not shown in the folder view: %s", name);
+                }
+                continue;
+            }
+            sources[shown++] = i;
+            member->path = job->entries[i].name;
+            member->is_directory = job->entries[i].is_directory;
             if (job->entries[i].unpacked_size >= 0) {
-                members[i].size = (uint64_t)job->entries[i].unpacked_size;
-                members[i].flags |= XXWIDGETS_ARCHIVE_SIZE_KNOWN;
+                member->size = (uint64_t)job->entries[i].unpacked_size;
+                member->flags |= XXWIDGETS_ARCHIVE_SIZE_KNOWN;
             }
             if (job->entries[i].packed_size >= 0) {
-                members[i].packed_size = (uint64_t)job->entries[i].packed_size;
-                members[i].flags |= XXWIDGETS_ARCHIVE_PACKED_SIZE_KNOWN;
+                member->packed_size = (uint64_t)job->entries[i].packed_size;
+                member->flags |= XXWIDGETS_ARCHIVE_PACKED_SIZE_KNOWN;
             }
-            members[i].modified = job->entries[i].modified;
-            members[i].attributes = job->entries[i].attributes;
+            member->modified = job->entries[i].modified;
+            member->attributes = job->entries[i].attributes;
+            if (job->entries[i].is_encrypted) {
+                const char *original = job->entries[i].attributes;
+                size_t length = strlen(original) + 14;
+                char *marked = (char *)malloc(length);
+                member->attributes = marked;
+                if (!marked) {
+                    size_t j;
+                    for (j = 0; j < shown; ++j) {
+                        free((void *)members[j].properties);
+                        if (job->entries[sources[j]].is_encrypted) free((void *)members[j].attributes);
+                    }
+                    free(members); free(sources); free(note); return 0;
+                }
+                snprintf(marked, length, "Encrypted%s%s", original[0] ? "; " : "", original);
+            }
             if (job->entries[i].property_count) {
                 size_t j;
                 xxwidgets_archive_property *properties = (xxwidgets_archive_property *)calloc(
                     job->entries[i].property_count, sizeof(*properties));
                 if (!properties) {
-                    for (j = 0; j < i; ++j) free((void *)members[j].properties);
-                    free(members); return 0;
+                    for (j = 0; j < shown; ++j) {
+                        free((void *)members[j].properties);
+                        if (job->entries[sources[j]].is_encrypted) free((void *)members[j].attributes);
+                    }
+                    free(members); free(sources); free(note); return 0;
                 }
-                members[i].properties = properties;
-                members[i].property_count = job->entries[i].property_count;
-                for (j = 0; j < members[i].property_count; ++j) {
+                member->properties = properties;
+                member->property_count = job->entries[i].property_count;
+                for (j = 0; j < member->property_count; ++j) {
                     properties[j].name = job->entries[i].properties[j].name;
                     properties[j].value = job->entries[i].properties[j].value;
                 }
             }
         }
-        status = xxwidgets_archivebrowser_set_entries(ui->members, members, job->entry_count);
-        for (i = 0; i < job->entry_count; ++i) free((void *)members[i].properties);
+        status = xxwidgets_archivebrowser_set_entries(ui->members, members, shown);
+        for (i = 0; i < shown; ++i) {
+            free((void *)members[i].properties);
+            if (job->entries[sources[i]].is_encrypted) free((void *)members[i].attributes);
+        }
         free(members);
-        if (status != XXWIDGETS_OK) return 0;
-        xxwidgets_archivebrowser_set_archive(ui->members, job->archive_path);
-        if (desktop_shell(ui)) {
-            size_t length = strlen(job->archive_path) + 24;
-            char *title = (char *)malloc(length);
-            if (title) {
-                snprintf(title, length, "%s - XFileUnpacker", job->archive_path);
-                xxwidgets_widget_set_text(ui->window, title); free(title);
+        if (status != XXWIDGETS_OK) { free(sources); free(note); return 0; }
+        free(ui->browser_sources);
+        ui->browser_sources = hidden ? sources : NULL; ui->browser_count = shown;
+        if (!hidden) free(sources);
+        if (hidden) {
+            char more[64];
+            if (hidden > 1) {
+                snprintf(more, sizeof(more), " (and %zu more)", hidden - 1);
+                if (note) {
+                    char *grown = (char *)realloc(note, strlen(note) + strlen(more) + 1);
+                    if (grown) { note = grown; strcat(note, more); }
+                }
             }
+            append_log(ui, note ? note : "Unsafe member paths are not shown in the folder view.");
+            free(note);
+        }
+        {
+            /* The path bar and title show the archive's path escaped as the
+             * log does: a format control in it must not show it reversed. */
+            char *shown = display_text(job->archive_path);
+            xxwidgets_archivebrowser_set_archive(ui->members, shown ? shown : "");
+            if (desktop_shell(ui) && shown) {
+                size_t length = strlen(shown) + 24;
+                char *title = (char *)malloc(length);
+                if (title) {
+                    snprintf(title, length, "%s - XFileUnpacker", shown);
+                    xxwidgets_widget_set_text(ui->window, title); free(title);
+                }
+            }
+            free(shown);
         }
         free_entries(ui->listed_entries, ui->listed_count);
         ui->listed_entries = job->entries; ui->listed_count = job->entry_count;
         job->entries = NULL; job->entry_count = job->entry_capacity = 0;
         free(ui->members_archive); ui->members_archive = copy_text(job->archive_path);
+        ui->members_type = job->have_file_types ? job->selected_type : job->request.handle_type;
         if (!autofill_listing_password(ui, job)) return 0;
         update_metadata(ui);
         return 1;
@@ -970,6 +1462,7 @@ static int populate_members(ui_state *ui, ui_job *job)
     job->entries = NULL;
     job->entry_count = job->entry_capacity = 0;
     free(ui->members_archive); ui->members_archive = copy_text(job->archive_path);
+    ui->members_type = job->have_file_types ? job->selected_type : job->request.handle_type;
     if (!autofill_listing_password(ui, job)) return 0;
     update_metadata(ui);
     return 1;
@@ -984,7 +1477,9 @@ static int clear_members(ui_state *ui)
         if (status == XXWIDGETS_OK) status = xxwidgets_archivebrowser_set_archive(ui->members, "");
     } else status = xxwidgets_archiveview_set_entries(ui->members, NULL, 0);
     if (status != XXWIDGETS_OK) return 0;
+    free(ui->browser_sources); ui->browser_sources = NULL; ui->browser_count = 0;
     free(ui->members_archive); ui->members_archive = NULL;
+    ui->members_type = XX_HANDLE_TYPE_UNKNOWN;
     free_entries(ui->listed_entries, ui->listed_count);
     ui->listed_entries = NULL; ui->listed_count = 0;
     update_metadata(ui);
@@ -1042,6 +1537,7 @@ static int start_job(ui_state *ui, xfu_command command)
         if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER) {
             xxwidgets_archive_browser_entry entry;
             xxwidgets_archivebrowser_get_selection(ui->members, &source, &entry);
+            source = browser_listed(ui, source);
         } else {
             xxwidgets_archive_entry entry;
             xxwidgets_archiveview_get_selection(ui->members, &source, &entry);
@@ -1086,25 +1582,27 @@ static int start_job(ui_state *ui, xfu_command command)
     job->request.callbacks.entry = job_entry;
     job->request.callbacks.progress = job_progress;
     job->request.callbacks.cancelled = job_cancelled;
-    job->request.callbacks.file_types = job_file_types;
+    job->request.callbacks.unpack_handle_types = job_unpack_handle_types;
     job->request.callbacks.walk_end = job_walk_end;
+    job->request.callbacks.not_archive = job_not_archive;
+    job->request.callbacks.encryption = job_encryption;
     job->worker_progress = xx_pd_init();
     job->overall_level = -1;
+    job->status_percent = -1;
     job->request.progress_state = &job->worker_progress;
     job->smoke_progress_delay = ui->progress_smoke;
     known_file = ui->file_types_path && !strcmp(ui->file_types_path, job->archive_path);
-    /* A file recognised as no archive at all is detected again: it may have
-     * become one since (a finished download, another file at that path). */
-    if (known_file && ui->selected_type == XX_FILE_TYPE_BINARY && ui->file_type_count <= 1) known_file = 0;
     requested_type = ui->pending_type_path && !strcmp(ui->pending_type_path, job->archive_path);
     free(ui->pending_type_path); ui->pending_type_path = NULL;
-    if (known_file || requested_type)
-        job->request.file_type = ui->selected_type;
-    else ui->selected_type = XX_FILE_TYPE_UNKNOWN;
-    if (ui->selected_type == XX_FILE_TYPE_UNKNOWN) {
+    /* Only a type the user picked is forced on the file. A detected one is
+     * detected again: the file at that path may have changed since (a
+     * finished download, another archive or a non-archive put there). */
+    if (requested_type || (known_file && ui->type_chosen))
+        job->request.handle_type = ui->selected_type;
+    else if (!known_file) { ui->selected_type = XX_HANDLE_TYPE_UNKNOWN; ui->type_chosen = 0; }
+    if (ui->selected_type == XX_HANDLE_TYPE_UNKNOWN) {
         ui_job initial = {0};
-        initial.archive_path = ""; initial.file_types[0] = XX_FILE_TYPE_BINARY;
-        initial.type_count = 1; initial.selected_type = XX_FILE_TYPE_BINARY;
+        initial.archive_path = ""; initial.selected_type = XX_HANDLE_TYPE_UNKNOWN;
         if (!populate_file_types(ui, &initial)) {
             show_status(ui, "Cannot reset the file type list."); job_destroy(job); return 0;
         }
@@ -1112,23 +1610,8 @@ static int start_job(ui_state *ui, xfu_command command)
             show_status(ui, "Cannot clear the archive listing."); job_destroy(job); return 0;
         }
     }
-    if (!retrieve && job->request.file_type == XX_FILE_TYPE_BINARY && known_file) {
-        ui->pending_extract_selected = 0;
-        if (command != XFU_COMMAND_LIST) {
-            show_status(ui, "Binary cannot be opened as an archive. Choose an archive file type.");
-            job_destroy(job); return 0;
-        }
-        if (!populate_members(ui, job)) {
-            show_status(ui, "Cannot clear the archive listing."); job_destroy(job); return 0;
-        }
-        show_status(ui, "Binary: no archive members.");
-        xxwidgets_widget_set_value(ui->progress, 0);
-        set_busy(ui, 0); job_destroy(job);
-        if (ui->smoke && !ui->type_smoke) { ui->exit_code = 0; ui->running = 0; }
-        return 1;
-    }
     if (command == XFU_COMMAND_EXTRACT && ui->pending_extract_selected) {
-        size_t count = 0;
+        size_t count = 0, i;
         ui->pending_extract_selected = 0;
         if (xxwidgets_archivebrowser_selected_sources(ui->members, NULL, 0, &count) != XXWIDGETS_OK ||
             !count || count > SIZE_MAX / sizeof(*job->selected_records)) {
@@ -1139,6 +1622,8 @@ static int start_job(ui_state *ui, xfu_command command)
             xxwidgets_archivebrowser_selected_sources(ui->members, job->selected_records, count, &count) != XXWIDGETS_OK) {
             show_status(ui, "Cannot collect the selected members."); job_destroy(job); return 0;
         }
+        /* Ascending browser sources map to ascending listed records. */
+        for (i = 0; i < count; ++i) job->selected_records[i] = browser_listed(ui, job->selected_records[i]);
         job->request.extract_selected = true;
         job->request.selected_records = job->selected_records;
         job->request.selected_record_count = count;
@@ -1277,8 +1762,8 @@ static int keep_listing(const ui_state *ui, const ui_job *job, int cancelled)
     size_t i;
     if (job->request.command == XFU_COMMAND_LIST || job->retrieve_password || !ui->listed_count ||
         !ui->file_types_path || strcmp(ui->file_types_path, job->archive_path)) return 0;
-    if (job->have_file_types && job->request.file_type != XX_FILE_TYPE_UNKNOWN) {
-        for (i = 0; i < job->type_count && job->file_types[i] != job->request.file_type; ++i) {}
+    if (job->have_file_types && ui->members_type != XX_HANDLE_TYPE_UNKNOWN) {
+        for (i = 0; i < job->type_count && job->file_types[i] != ui->members_type; ++i) {}
         if (i == job->type_count) return 0;
     }
     if (job->entry_count > ui->listed_count) return 0;
@@ -1287,63 +1772,192 @@ static int keep_listing(const ui_state *ui, const ui_job *job, int cancelled)
         const xfu_entry *listed = &ui->listed_entries[i], *read = &job->entries[i];
         if (!listed->name || !read->name || strcmp(listed->name, read->name) ||
             listed->unpacked_size != read->unpacked_size || listed->packed_size != read->packed_size ||
+            listed->is_encrypted != read->is_encrypted ||
             listed->is_directory != read->is_directory || strcmp(listed->modified, read->modified) ||
             strcmp(listed->attributes, read->attributes)) return 0;
     }
     return 1;
 }
 
+/* A type picked from the list reads the file as that type; the reader that
+ * serves it can know fewer of the file's interpretations than the one that
+ * offered them (a .tar.lz4 read as LZ4). The list keeps offering them. */
+static void keep_offered_types(const ui_state *ui, ui_job *job)
+{
+    size_t i, j;
+    if (job->request.handle_type == XX_HANDLE_TYPE_UNKNOWN || !ui->file_types_path ||
+        strcmp(ui->file_types_path, job->archive_path) || job->type_count >= ui->file_type_count)
+        return;
+    for (i = 0; i < job->type_count && job->file_types[i] != job->selected_type; ++i) {}
+    if (i == job->type_count) return; /* The pick does not fit the file. */
+    for (i = 0; i < job->type_count; ++i) {
+        for (j = 0; j < ui->file_type_count && ui->offered_types[j] != job->file_types[i]; ++j) {}
+        if (j == ui->file_type_count) return;
+    }
+    {
+        xx_handle_type_t *copy = (xx_handle_type_t *)malloc(ui->file_type_count * sizeof(*copy));
+        if (!copy) { job->memory_error = 1; return; }
+        memcpy(copy, ui->offered_types, ui->file_type_count * sizeof(*copy));
+        free(job->file_types); job->file_types = copy;
+        job->type_count = ui->file_type_count;
+    }
+}
+
+/* How far (0..1000) the first busy level below the job's own that knows
+ * its total has come, in the worker's last snapshot, and its label: the
+ * bytes a reader has read. -1 when there is none. Under the job's lock,
+ * which also guards overall_level once the worker runs. */
+static int stream_permille(const ui_job *job, char *label, size_t size)
+{
+    int i;
+    for (i = 0; i < XX_PD_LEVELS; ++i) {
+        const xx_pd_record *record = &job->progress_snapshot.records[i];
+        if (i == job->overall_level || !record->is_busy || !record->total) continue;
+        snprintf(label, size, "%.*s", (int)sizeof(record->status), record->status);
+        return record->current >= record->total ? 1000 :
+            (int)((long double)record->current * 1000 / record->total);
+    }
+    return -1;
+}
+
+/* The main bar of a running job counts members: it never moves back. A
+ * reader's passes over a stream (one that validates it first, then decodes
+ * it) each start their bytes again; the status line shows those. */
+static void job_bar(ui_state *ui, ui_job *job, int percent)
+{
+    if (percent <= job->bar_percent) return;
+    job->bar_percent = percent;
+    xxwidgets_widget_set_value(ui->progress, percent);
+}
+
+/* The status line of a running job: the members counted and the member the
+ * read path named last, and, while that count cannot move, how far the pass
+ * over the stream being read has come (label, percent; -1 for none). */
+static void show_job_status(ui_state *ui, ui_job *job, uint64_t completed, uint64_t total,
+                            const char *label, int percent)
+{
+    const char *name = job->status_name ? job->status_name : "";
+    /* No ' | ' before a member name that no read path has given yet. */
+    const char *separator = name[0] ? " | " : "";
+    char *shown = percent >= 0 ? display_text(label[0] ? label : "Reading archive") : NULL;
+    char stream[320] = "";
+    size_t capacity = strlen(name) + sizeof(stream) + 128;
+    char *message = (char *)malloc(capacity);
+    if (percent >= 0 && shown)
+        snprintf(stream, sizeof(stream), " | %s %d%%", shown, percent);
+    free(shown);
+    if (!message) return;
+    if (!job->status_counted)
+        snprintf(message, capacity, "%s archive...%s", command_name(job->request.command), stream);
+    else if (total) snprintf(message, capacity, "%s: %" PRIu64 "/%" PRIu64 "%s%s%s",
+        command_name(job->request.command), completed, total, stream, separator, name);
+    else snprintf(message, capacity, "%s: %" PRIu64 " member(s)%s%s%s",
+        command_name(job->request.command), completed, stream, separator, name);
+    show_status(ui, message);
+    free(message);
+}
+
 static void drain_job(ui_state *ui)
 {
     ui_job *job = ui->job;
-    char *lines[UI_PENDING_LOGS], *current = NULL;
-    size_t i, count;
+    char *current = NULL;
     uint64_t completed, total;
-    int done, changed, cancelled, display_ok = 1, retrieval_current = 1, retrieval_result = 2;
+    int done, changed, cancelled, encrypted, permille, stream_percent, display_ok = 1, retrieval_current = 1, retrieval_result = 2;
+    xfu_encryption_status blocked;
+    int notify_encryption = 0, encryption_changed = 0;
+    char stream_label[sizeof(job->progress_snapshot.records[0].status) + 1] = "";
     if (!job) return;
     mutex_lock(&job->mutex);
-    count = job->log_count;
-    for (i = 0; i < count; ++i)
-        lines[i] = job->logs[(job->log_first + i) % UI_PENDING_LOGS];
-    job->log_first = job->log_count = 0;
     completed = job->completed; total = job->total;
     changed = job->progress_changed;
     if (changed) current = copy_text(job->current_name);
     job->progress_changed = 0;
     done = job->done;
     cancelled = job->cancel_requested;
+    encrypted = job->encryption_detected;
+    blocked = job->encryption_blocked;
+    permille = stream_permille(job, stream_label, sizeof(stream_label));
     mutex_unlock(&job->mutex);
-    for (i = 0; i < count; ++i) { append_log(ui, lines[i]); free(lines[i]); }
-    if (changed && !cancelled) {
-        char *message;
-        size_t capacity = strlen(current ? current : "") + 128;
-        message = (char *)malloc(capacity);
-        if (message) {
-            if (total) snprintf(message, capacity, "%s: %" PRIu64 "/%" PRIu64 " | %s",
-                command_name(job->request.command), completed, total, current ? current : "");
-            else snprintf(message, capacity, "%s: %" PRIu64 " member(s) | %s",
-                command_name(job->request.command), completed, current ? current : "");
-            show_status(ui, message);
-            free(message);
+    if (encrypted && !ui->archive_encrypted) {
+        char *path = widget_text(ui->archive_path);
+        if (path && !strcmp(path, job->archive_path)) {
+            set_encryption_marker(ui, 1);
+            encryption_changed = 1;
         }
-        if (total) {
-            int percent = completed >= total ? 100 : (int)((long double)completed * 100 / total);
-            xxwidgets_widget_set_value(ui->progress, percent);
-        }
+        free(path);
     }
+    /* After done was read: a finished job has logged everything by then. */
+    drain_logs(ui, job);
+    if (!done) show_detected_types(ui, job);
+    if (!job->status_since || completed != job->status_completed) {
+        job->status_completed = completed;
+        job->status_since = progress_clock();
+    }
+    /* One member, or a count not known yet (a compressed TAR is decoded
+     * before its walk): the count cannot move, the bytes read can. So for a
+     * count that has not moved for a while (a solid 7-Zip folder is decoded
+     * whole at its first file, a large member is read). */
+    stream_percent = !done && !cancelled && permille >= 0 &&
+        (!total || (total == 1 && !completed) || progress_clock() - job->status_since >= 500)
+        ? (permille >= 990 ? 99 : permille / 10) : -1;
+    if (changed) {
+        /* A call without a name keeps the member named last. */
+        if (current) { free(job->status_name); job->status_name = current; current = NULL; }
+        job->status_counted = 1;
+    }
+    if (!cancelled && (changed || encryption_changed || stream_percent != job->status_percent)) {
+        job->status_percent = stream_percent;
+        show_job_status(ui, job, completed, total, stream_label, stream_percent);
+    }
+    if (changed && !cancelled && total)
+        job_bar(ui, job, completed >= total ? 100 : (int)((long double)completed * 100 / total));
     free(current);
     if (!done) return;
     job_join(job);
+    {
+        char *path = widget_text(ui->archive_path);
+        int current_archive = path && !strcmp(path, job->archive_path);
+        free(path);
+        if (current_archive) {
+            /* The same path may now hold a different, plain archive. A
+             * completed ordinary listing is authoritative for its marker. */
+            if (encrypted || (job->request.command == XFU_COMMAND_LIST && job->result == 0))
+                set_encryption_marker(ui, encrypted);
+            notify_encryption = encrypted && !cancelled && !ui->closing;
+        }
+    }
     if (job->retrieve_password) {
         char *path = widget_text(ui->archive_path);
         retrieval_current = path && !strcmp(path, job->archive_path) &&
             ui->password_archive_revision == job->retrieve_revision;
         free(path);
     }
+    if (job->have_file_types) keep_offered_types(ui, job);
     if ((!job->retrieve_password || (job->result == 0 && !cancelled && retrieval_current)) &&
-        job->have_file_types && job->type_count && !populate_file_types(ui, job)) {
+        job->have_file_types && !populate_file_types(ui, job)) {
         append_log(ui, "Could not display the detected file types."); job->result = 2; display_ok = 0;
     }
+    if (ui->startup_handle_pending) {
+        ui->startup_handle_pending = 0;
+        /* A startup selection follows the same controller path as a real
+         * combobox choice. Smoke mode verifies the actual widget value too,
+         * so a successful extraction cannot hide a different selected handle. */
+        if (ui->smoke && ui->startup_handle != XX_HANDLE_TYPE_UNKNOWN && job->result != 2) {
+            xx_var value = {0};
+            if (job->request.handle_type != ui->startup_handle ||
+                !job->have_file_types || job->selected_type != ui->startup_handle ||
+                ui->selected_type != ui->startup_handle ||
+                xxwidgets_combobox_get_current(ui->file_type, &value) != XXWIDGETS_OK ||
+                value.type != XX_VAR_TYPE_UINT32 || value.val.u32 != (uint32_t)ui->startup_handle) {
+                fputs("Startup unpack handle: controller/combobox selection mismatch.\n", stderr);
+                append_log(ui, "Could not select the requested unpack handle."); job->result = 2;
+            } else fprintf(stderr, "Startup unpack handle: %s (%u)\n",
+                unpack_handle_label(ui->startup_handle), (unsigned)ui->startup_handle);
+        }
+    }
+    /* No Test or Extract for a type the run found is not an archive. */
+    if (job->not_archive && ui->file_types_path && !strcmp(ui->file_types_path, job->archive_path) &&
+        ui->selected_type == job->selected_type) ui->selected_not_archive = 1;
     if ((!job->retrieve_password || (job->result == 0 && !cancelled && retrieval_current)) &&
         !job->request.extract_selected &&
         !keep_listing(ui, job, cancelled)) {
@@ -1360,7 +1974,9 @@ static void drain_job(ui_state *ui)
         char *directory = keep && browser ? copy_text(xxwidgets_archivebrowser_directory(ui->members)) : NULL;
         char *current = keep ? current_member_path(ui, &occurrence, &current_directory) : NULL;
         if (!populate_members(ui, job)) {
-            append_log(ui, "Could not display archive members."); job->result = 2; display_ok = 0;
+            /* Only the view failed: a Test or Extract keeps its own result. */
+            append_log(ui, "Could not display archive members."); display_ok = 0;
+            if (job->request.command == XFU_COMMAND_LIST) job->result = 2;
         } else if (keep) {
             /* A folder that is gone leaves the root shown, with its first row. */
             int restored = !directory || !directory[0] ||
@@ -1374,8 +1990,12 @@ static void drain_job(ui_state *ui)
     if (cancelled) show_status(ui, job->request.command == XFU_COMMAND_EXTRACT ?
         "Cancelled. Completed files are kept." : "Cancelled.");
     else if (!job->retrieve_password && job->request.command == XFU_COMMAND_LIST && job->have_file_types &&
-             job->selected_type == XX_FILE_TYPE_BINARY && !job->memory_error && display_ok) {
-        show_status(ui, "Binary: no archive members."); job->result = 0;
+             (job->not_archive || (!job->type_count && job->result != 2)) &&
+             !job->memory_error && display_ok) {
+        char friendly[96];
+        snprintf(friendly, sizeof(friendly), "%s: no archive members.",
+                 job->not_archive ? xx_format_file_type_to_string(job->not_archive_type) : "No unpacker");
+        show_status(ui, friendly); job->result = 0;
         xxwidgets_widget_set_value(ui->progress, 0);
     } else if (job->result == 0) {
         show_status(ui, "Done."); xxwidgets_widget_set_value(ui->progress, 100);
@@ -1413,9 +2033,17 @@ static void drain_job(ui_state *ui)
          (ui->password_smoke == 3 && job->request.command == XFU_COMMAND_TEST))) {
         ui->exit_code = job->result; ui->running = 0;
     }
+    /* A verified embedded credential may have been filled while presenting
+     * this listing. It suppresses an informational notice, not a blocked
+     * operation. Ordinary smoke runs never open an unattended modal dialog. */
+    notify_encryption = notify_encryption &&
+        (blocked || (!job->request.password && !ui->automatic_password)) &&
+        (!ui->smoke || ui->encryption_smoke);
     ui->job = NULL;
     job_destroy(job);
     set_busy(ui, 0);
+    if (notify_encryption && !show_encryption_notice(ui, blocked ? blocked : XFU_ENCRYPTION_DETECTED) && ui->smoke)
+        ui->exit_code = 2;
     if (ui->closing) ui->running = 0;
 }
 
@@ -1582,6 +2210,7 @@ static void native_information(ui_state *ui)
     if (xxwidgets_archivebrowser_get_selection(ui->members, &source, &entry) == XXWIDGETS_OK && entry.path) {
         memset(&selected, 0, sizeof(selected));
         selected.unpacked_size = selected.packed_size = -1;
+        source = browser_listed(ui, source);
         /* Explicit members retain the owned display properties. Synthesized
          * directory rows have no source metadata or password of their own. */
         if (source < ui->listed_count) selected = ui->listed_entries[source];
@@ -1642,9 +2271,14 @@ static void run_native_action(ui_state *ui)
         return;
     }
     if (ui->job || ui->closing) return;
-    if (ui->selected_type == XX_FILE_TYPE_BINARY &&
+    if (!archive_actions(ui) &&
         (action == XFU_SHELL_EXTRACT || action == XFU_SHELL_EXTRACT_SELECTED || action == XFU_SHELL_TEST)) {
-        show_status(ui, "Binary cannot be opened as an archive. Choose an archive file type."); return;
+        char message[128];
+        if (ui->selected_type == XX_HANDLE_TYPE_UNKNOWN)
+            snprintf(message, sizeof(message), "Open an archive with a supported unpacker first.");
+        else snprintf(message, sizeof(message), "%s cannot be opened as an archive. Choose another unpacker.",
+                      unpack_handle_label(ui->selected_type));
+        show_status(ui, message); return;
     }
     if (action == XFU_SHELL_EXTRACT || action == XFU_SHELL_TEST || action == XFU_SHELL_REFRESH) {
         char *path = widget_text(ui->archive_path);
@@ -1715,9 +2349,11 @@ static int install_native_shortcuts(ui_state *ui)
 #endif
 
 /* Smallest grid the classic layout arranges; smaller windows and terminals
- * are laid out at this size. */
+ * are laid out at this size. A native window may be shorter (a 1024x600
+ * screen has room for 22 rows): its members list gives up the rows. */
 #define CLASSIC_MIN_COLUMNS 76
 #define CLASSIC_MIN_ROWS 23
+#define NATIVE_MIN_ROWS 20
 
 static void rect(xxwidgets_widget *widget, int x, int y, int width, int height)
 {
@@ -1727,7 +2363,7 @@ static void rect(xxwidgets_widget *widget, int x, int y, int width, int height)
 
 static void layout(ui_state *ui, int columns, int rows)
 {
-    int extra, archive_height, log_height, metadata_y, progress_y;
+    int extra, archive_height, log_height, details_height, gap, metadata_y, progress_y;
     int native_browse = ui->backend == XXWIDGETS_BACKEND_NATIVE;
     int browse_width;
     if (desktop_shell(ui)) {
@@ -1780,7 +2416,8 @@ static void layout(ui_state *ui, int columns, int rows)
     if (!xxwidgets_file_dialog_available(ui->app)) native_browse = 0;
 #endif
     if (columns < CLASSIC_MIN_COLUMNS) columns = CLASSIC_MIN_COLUMNS;
-    if (rows < CLASSIC_MIN_ROWS) rows = CLASSIC_MIN_ROWS;
+    if (rows < (ui->backend == XXWIDGETS_BACKEND_NATIVE ? NATIVE_MIN_ROWS : CLASSIC_MIN_ROWS))
+        rows = ui->backend == XXWIDGETS_BACKEND_NATIVE ? NATIVE_MIN_ROWS : CLASSIC_MIN_ROWS;
     ui->columns = columns; ui->rows = rows;
     browse_width = native_browse ? 11 : 0;
     rect(ui->archive_label, 1, 0, 9, 1);
@@ -1806,16 +2443,22 @@ static void layout(ui_state *ui, int columns, int rows)
     xxwidgets_widget_set_visible(ui->details, ui->advanced_visible);
     /* Rows 0-5 hold the fields, buttons and the members heading; the rest is
      * members, metadata, optional details, progress, status, log and help. */
-    extra = rows - 23;
+    extra = rows > CLASSIC_MIN_ROWS ? rows - CLASSIC_MIN_ROWS : 0;
     log_height = 2 + extra / 4;
-    archive_height = rows - 12 - log_height;
-    if (ui->advanced_visible) archive_height -= 3;
+    details_height = ui->advanced_visible ? 3 : 0;
+    gap = 1; /* Between the metadata (and details) and the progress bar. */
+    archive_height = rows - 12 - log_height - details_height;
+    /* The members browser is drawn no shorter than about 4.2 rows: a short
+     * window gives up a details row, then the gap, before it gets less. A
+     * scrolled list (details, log) is itself drawn about two rows tall. */
+    if (ui->advanced_visible && archive_height < 5) { --details_height; ++archive_height; }
+    if (ui->advanced_visible && archive_height < 5) { gap = 0; ++archive_height; }
     metadata_y = 6 + archive_height;
-    progress_y = metadata_y + 2 + (ui->advanced_visible ? 3 : 0);
+    progress_y = metadata_y + 1 + details_height + gap;
     rect(ui->members_label, 1, 5, columns - 59, 1);
     rect(ui->members, 1, 6, columns - 2, archive_height);
     rect(ui->metadata, 1, metadata_y, columns - 2, 1);
-    if (ui->advanced_visible) rect(ui->details, 1, metadata_y + 1, columns - 2, 3);
+    if (ui->advanced_visible) rect(ui->details, 1, metadata_y + 1, columns - 2, details_height);
     rect(ui->progress, 1, progress_y, columns - 2, 1);
     rect(ui->status, 1, progress_y + 1, columns - 2, 1);
     rect(ui->log_label, 1, progress_y + 2, columns - 2, 1);
@@ -1903,7 +2546,7 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
            event->widget == ui->archive_browse || event->widget == ui->get_password)) ||
          (event->type == XXWIDGETS_EVENT_ACTIVATE && event->widget == ui->archive_path) ||
          (event->type == XXWIDGETS_EVENT_SELECT && event->widget == ui->file_type))) {
-        /* Before the action reads them, so Browse, File type and the job all
+        /* Before the action reads them, so Browse, Unpack and the job all
          * see the same path. */
         expand_home_field(ui->archive_path);
         expand_home_field(ui->output_dir);
@@ -1931,7 +2574,8 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
             char *path = widget_text(ui->archive_path);
             if (!path) { show_status(ui, "Cannot read the file path."); return; }
             free(ui->pending_type_path); ui->pending_type_path = path;
-            ui->selected_type = (xx_file_type_t)value.val.u32;
+            ui->selected_type = (xx_handle_type_t)value.val.u32;
+            ui->type_chosen = 1;
             if (!clear_members(ui)) show_status(ui, "Cannot clear the previous archive listing.");
             ui->pending_extract_selected = 0;
             ui->pending_command = XFU_COMMAND_LIST;
@@ -2022,7 +2666,7 @@ static int select_source_member(ui_state *ui, size_t source)
             xxwidgets_archive_browser_entry entry;
             size_t index;
             if (xxwidgets_archivebrowser_get_entry(ui->members, row, &index, &entry) != XXWIDGETS_OK) return 0;
-            if (index == source) break;
+            if (browser_listed(ui, index) == source) break;
         }
         if (row == count) return 0;
     } else row = source;
@@ -2198,8 +2842,8 @@ static int smoke_password_listing(ui_state *ui)
     if (ui->password_smoke_stage == 0) {
         const char *manual = "UI manual override ; \\x0A";
         char *archive = widget_text(ui->archive_path);
-        xxwidgets_event edit = {XXWIDGETS_EVENT_CHANGE, ui->password, 0, 0, 0};
-        xxwidgets_event change = {XXWIDGETS_EVENT_CHANGE, ui->archive_path, 0, 0, 0};
+        xxwidgets_event edit = {.type = XXWIDGETS_EVENT_CHANGE, .widget = ui->password};
+        xxwidgets_event change = {.type = XXWIDGETS_EVENT_CHANGE, .widget = ui->archive_path};
         int okay = 1;
         if (!archive || xxwidgets_widget_set_text(ui->password, manual) != XXWIDGETS_OK) { free(archive); return 0; }
         on_event(ui->app, &edit, ui);
@@ -2250,7 +2894,7 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
     /* The classic layout follows RESIZE, so the window may shrink to its
      * minimum. Should the backend refuse, the window only loses that limit. */
     if (ui->backend == XXWIDGETS_BACKEND_NATIVE)
-        (void)xxwidgets_window_set_minimum_size(ui->window, CLASSIC_MIN_COLUMNS, CLASSIC_MIN_ROWS);
+        (void)xxwidgets_window_set_minimum_size(ui->window, CLASSIC_MIN_COLUMNS, NATIVE_MIN_ROWS);
 #endif
     if (!create_about(ui)) return 0;
     if (ui->smoke) xxwidgets_widget_set_visible(ui->window, 0);
@@ -2262,8 +2906,8 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
     /* Created in on-screen order, which is also the Tab order. */
     CONTROL(output_label, XXWIDGETS_LABEL, "Output:");
     CONTROL(output_dir, XXWIDGETS_EDIT, output);
-    CONTROL(type_label, XXWIDGETS_LABEL, "File type:");
-    CONTROL(file_type, XXWIDGETS_COMBOBOX, "Binary");
+    CONTROL(type_label, XXWIDGETS_LABEL, "Unpack:");
+    CONTROL(file_type, XXWIDGETS_COMBOBOX, "Automatic");
     CONTROL(password_label, XXWIDGETS_LABEL, "Password:");
     CONTROL(password, XXWIDGETS_EDIT, "");
     CONTROL(get_password, XXWIDGETS_BUTTON, "Get password");
@@ -2292,15 +2936,18 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
         CONTROL(copy_path, XXWIDGETS_BUTTON, "Copy path");
         CONTROL(info, XXWIDGETS_BUTTON, "Info");
         CONTROL(log_toggle, XXWIDGETS_BUTTON, "Log");
-        xxwidgets_archivebrowser_set_archive(ui->members, archive);
+        {
+            char *shown = display_text(archive);
+            xxwidgets_archivebrowser_set_archive(ui->members, shown ? shown : "");
+            free(shown);
+        }
         xxwidgets_widget_set_text(ui->status, "Open an archive or drop it here.");
         xxwidgets_widget_set_text(ui->metadata, "0 objects");
     }
 #undef CONTROL
     {
         ui_job initial = {0};
-        initial.archive_path = ""; initial.file_types[0] = XX_FILE_TYPE_BINARY;
-        initial.type_count = 1; initial.selected_type = XX_FILE_TYPE_BINARY;
+        initial.archive_path = ""; initial.selected_type = XX_HANDLE_TYPE_UNKNOWN;
         if (!populate_file_types(ui, &initial)) return 0;
     }
     if (xxwidgets_widget_set_value(ui->advanced, ui->advanced_visible) != XXWIDGETS_OK) return 0;
@@ -2363,6 +3010,8 @@ static const char ui_usage[] =
     "  t <archive>               Test archive contents in memory\n\n"
     "Without a command, an archive path opens its listing.\n"
     "-o<dir>: output directory for x (default: the current directory).\n"
+    "--handle <name|id>: select an unpack handle in the Unpack list (default: Automatic).\n"
+    "Names and XX_HANDLE_TYPE_* names are case-insensitive; IDs use the handle enum.\n"
     "-p<password>: initialize the editable Password field (-p for an empty password).\n"
     "Recovered passwords autofill unless edited; manual input is literal.\n"
     "Automatic values allow per-member recovery; explicit input overrides it.\n"
@@ -2487,17 +3136,281 @@ static VOID CALLBACK smoke_close_formats(HWND unused, UINT message, UINT_PTR tim
             copy && IsWindowEnabled(copy) && (GetWindowLongPtrW(edit, GWL_STYLE) & ES_READONLY) &&
             wcsstr(body, L"Supported file types (xxfclib): ") && wcsstr(body, L"CPX4") &&
             wcsstr(body, L"TAR.GZ") && wcsstr(body, L"Xamarin compressed assembly (XALZ)") &&
-            count > 1200 && wcsstr(body, L"Archive creation: 7z, ZIP, TAR, GZIP, BZIP2, XZ, WIM") &&
+            count > 1200 && wcsstr(body, L"Archive creation: 7z, ZIP, TAR, GZIP, BZIP2, XZ, stored WIM") &&
             lines == expected_lines;
     }
     free(body); free(expected);
     KillTimer(state->owner, timer);
     PostMessageW(dialog, WM_CLOSE, 0, 0);
 }
+
+typedef struct encryption_smoke_ack {
+    HWND owner;
+    DWORD ui_thread;
+    int native, seen, valid, ticks, active;
+} encryption_smoke_ack;
+
+static BOOL CALLBACK smoke_find_encryption(HWND window, LPARAM data)
+{
+    wchar_t title[80];
+    GetWindowTextW(window, title, 80);
+    if (!wcscmp(title, L"Encrypted archive")) { *(HWND *)data = window; return FALSE; }
+    return TRUE;
+}
+
+static BOOL CALLBACK smoke_encryption_text(HWND window, LPARAM data)
+{
+    wchar_t text[1024];
+    GetWindowTextW(window, text, 1024);
+    if (wcsstr(text, L"password") && (wcsstr(text, L"encrypted") || wcsstr(text, L"unlock")))
+        *(int *)data = 1;
+    return TRUE;
+}
+
+static VOID CALLBACK smoke_ack_encryption_native(HWND window, UINT message, UINT_PTR timer, DWORD time)
+{
+    encryption_smoke_ack *ack = (encryption_smoke_ack *)timer;
+    HWND dialog = NULL;
+    int text = 0;
+    (void)window; (void)message; (void)time;
+    if (!ack->active) return;
+    EnumThreadWindows(ack->ui_thread, smoke_find_encryption, (LPARAM)&dialog);
+    if (!dialog) {
+        if (++ack->ticks >= 300) {
+            encryption_smoke_trace("native notice not found"); KillTimer(ack->owner, timer); ack->active = 0;
+        }
+        return;
+    }
+    EnumChildWindows(dialog, smoke_encryption_text, (LPARAM)&text);
+    ack->seen = 1;
+    ack->valid = text && !IsWindowEnabled(ack->owner) && GetWindow(dialog, GW_OWNER) == ack->owner;
+    encryption_smoke_trace("native notice seen body=%d modal=%d owner=%d", text,
+        !IsWindowEnabled(ack->owner), GetWindow(dialog, GW_OWNER) == ack->owner);
+    KillTimer(ack->owner, timer);
+    ack->active = 0;
+    PostMessageW(dialog, WM_COMMAND, IDOK, 0);
+}
+
+static DWORD WINAPI smoke_ack_encryption(LPVOID data)
+{
+    encryption_smoke_ack *ack = (encryption_smoke_ack *)data;
+    unsigned ticks;
+    for (ticks = 0; ticks < 300; ++ticks) {
+        {
+            HANDLE output = CreateFileW(L"CONOUT$", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                NULL, OPEN_EXISTING, 0, NULL);
+            CONSOLE_SCREEN_BUFFER_INFO info;
+            int title = 0, password = 0;
+            if (GetConsoleScreenBufferInfo(output, &info)) {
+                SHORT row;
+                for (row = info.srWindow.Top; row <= info.srWindow.Bottom; ++row) {
+                    wchar_t line[501]; DWORD read_count, width = info.srWindow.Right - info.srWindow.Left + 1;
+                    COORD at = {info.srWindow.Left, row};
+                    if (width > 500) width = 500;
+                    if (!ReadConsoleOutputCharacterW(output, line, width, at, &read_count)) continue;
+                    line[read_count] = 0;
+                    if (wcsstr(line, L"Encrypted archive")) title = 1;
+                    if (wcsstr(line, L"password") || wcsstr(line, L"Password")) password = 1;
+                }
+            }
+            if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
+            if (title || ticks == 299) {
+                INPUT_RECORD records[2] = {{0}, {0}}; DWORD written;
+                records[0].EventType = records[1].EventType = KEY_EVENT;
+                records[0].Event.KeyEvent.bKeyDown = TRUE;
+                records[0].Event.KeyEvent.wRepeatCount = records[1].Event.KeyEvent.wRepeatCount = 1;
+                records[0].Event.KeyEvent.wVirtualKeyCode = records[1].Event.KeyEvent.wVirtualKeyCode = VK_RETURN;
+                records[0].Event.KeyEvent.uChar.UnicodeChar = records[1].Event.KeyEvent.uChar.UnicodeChar = L'\r';
+                ack->seen = title; ack->valid = title && password;
+                encryption_smoke_trace("TUI notice seen=%d password=%d ticks=%u", title, password, ticks);
+                if (!WriteConsoleInputW(GetStdHandle(STD_INPUT_HANDLE), records, 2, &written) || written != 2) ack->valid = 0;
+                return 0;
+            }
+        }
+        Sleep(10);
+    }
+    PostThreadMessageW(ack->ui_thread, WM_QUIT, 2, 0);
+    return 0;
+}
 #endif
+
+static int smoke_finish_encryption_job(ui_state *ui)
+{
+#ifdef _WIN32
+    /* KillTimer can leave an already queued WM_TIMER. Static storage and an
+     * explicit active guard keep that late callback harmless after return. */
+    static encryption_smoke_ack ack;
+    HANDLE acknowledger;
+    memset(&ack, 0, sizeof(ack));
+    ack.owner = (HWND)xxwidgets_widget_native_handle(ui->window);
+    ack.ui_thread = GetCurrentThreadId(); ack.native = desktop_shell(ui);
+    if (ack.native) {
+        ack.active = 1;
+        if (!SetTimer(ack.owner, (UINT_PTR)&ack, 20, smoke_ack_encryption_native)) { ack.active = 0; return 0; }
+        drain_job(ui);
+        KillTimer(ack.owner, (UINT_PTR)&ack);
+        ack.active = 0;
+        encryption_smoke_trace("native drain finished seen=%d valid=%d", ack.seen, ack.valid);
+        return ack.seen && ack.valid;
+    }
+    acknowledger = CreateThread(NULL, 0, smoke_ack_encryption, &ack, 0, NULL);
+    if (!acknowledger) return 0;
+    drain_job(ui);
+    WaitForSingleObject(acknowledger, INFINITE); CloseHandle(acknowledger);
+    encryption_smoke_trace("TUI drain finished seen=%d valid=%d", ack.seen, ack.valid);
+    return ack.seen && ack.valid;
+#else
+    (void)ui;
+    fputs("Encryption modal smoke acknowledgement requires the Win32 test backend.\n", stderr);
+    return 0;
+#endif
+}
+
+static int smoke_encryption(ui_state *ui)
+{
+    ui_job *job;
+    xfu_entry encrypted = {0}, plain = {0};
+    char *status, *metadata, *label;
+    unsigned before = ui->encryption_notices;
+    int okay;
+    encryption_smoke_trace("begin backend=%d", (int)ui->backend);
+    if (!password_archive_changed(ui, "encryption-smoke.arc") ||
+        xxwidgets_widget_set_text(ui->archive_path, "encryption-smoke.arc") != XXWIDGETS_OK ||
+        xxwidgets_widget_set_visible(ui->window, 1) != XXWIDGETS_OK) { encryption_smoke_trace("FAILED initialize widgets"); return 0; }
+    job = (ui_job *)calloc(1, sizeof(*job));
+    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    job->archive_path = copy_text("encryption-smoke.arc");
+    if (!job->archive_path) { job_destroy(job); return 0; }
+    job->request.command = XFU_COMMAND_LIST; job->result = 2; job->done = 1;
+    encrypted.name = "encrypted.txt"; encrypted.is_encrypted = true;
+    plain.name = "plain.txt";
+    job_entry(job, &encrypted); job_entry(job, &plain);
+    job_encryption(job, XFU_ENCRYPTION_DETECTED, "encrypted.txt");
+    job_encryption(job, XFU_ENCRYPTION_PASSWORD_REQUIRED, NULL);
+    job_encryption(job, XFU_ENCRYPTION_PASSWORD_REQUIRED, "encrypted.txt");
+    ui->job = job; set_busy(ui, 1);
+    job->done = 0;
+    drain_job(ui);
+    if (ui->job != job || !ui->archive_encrypted || ui->encryption_notices != before) { encryption_smoke_trace("FAILED early banner"); return 0; }
+    encryption_smoke_trace("early banner passed; completing blocked listing");
+    job->done = 1;
+    if (!smoke_finish_encryption_job(ui)) { encryption_smoke_trace("FAILED blocked notice acknowledgement"); return 0; }
+    status = widget_text(ui->status);
+    okay = !ui->job && !ui->busy && ui->archive_encrypted && ui->encryption_notices == before + 1 &&
+        xxwidgets_widget_has_focus(ui->password) == 1 && status && strstr(status, "[Encrypted]");
+    free(status);
+    if (!okay || !select_source_member(ui, 0)) { encryption_smoke_trace("FAILED notice count/focus/banner or encrypted selection"); return 0; }
+    encryption_smoke_trace("blocked notice and Password focus passed");
+    metadata = widget_text(ui->metadata);
+    okay = metadata && strstr(metadata, "Encrypted | "); free(metadata);
+    if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER) {
+        xxwidgets_archive_browser_entry entry; size_t source;
+        okay = okay && xxwidgets_archivebrowser_get_selection(ui->members, &source, &entry) == XXWIDGETS_OK &&
+            entry.attributes && strstr(entry.attributes, "Encrypted");
+    }
+    if (!okay || !select_source_member(ui, 1)) { encryption_smoke_trace("FAILED encrypted metadata/attributes or plain selection"); return 0; }
+    metadata = widget_text(ui->metadata);
+    okay = metadata && !strstr(metadata, "Encrypted | "); free(metadata);
+    if (okay) {
+        ui_job replacement = {0};
+        char *previous_path = ui->file_types_path;
+        ui->file_types_path = copy_text("encryption-smoke.arc");
+        replacement.archive_path = ui->file_types_path;
+        replacement.request.command = XFU_COMMAND_TEST; replacement.read_all = 1;
+        replacement.entry_count = ui->listed_count;
+        replacement.entries = (xfu_entry *)malloc(ui->listed_count * sizeof(*replacement.entries));
+        okay = ui->file_types_path && replacement.entries;
+        if (okay) {
+            memcpy(replacement.entries, ui->listed_entries, ui->listed_count * sizeof(*replacement.entries));
+            okay = keep_listing(ui, &replacement, 0);
+            replacement.entries[0].is_encrypted = false;
+            okay = okay && !keep_listing(ui, &replacement, 0);
+        }
+        free(replacement.entries); free(ui->file_types_path); ui->file_types_path = previous_path;
+    }
+    if (!okay || !password_archive_changed(ui, "plaintext-smoke.arc")) { encryption_smoke_trace("FAILED mixed metadata or changed-encryption listing invalidation"); return 0; }
+    encryption_smoke_trace("mixed metadata and changed-encryption listing passed");
+    status = widget_text(ui->status); label = widget_text(ui->members_label);
+    okay = !ui->archive_encrypted && status && !strstr(status, "Encrypted") && label && !strstr(label, "encrypted");
+    free(status); free(label);
+    if (!okay) { encryption_smoke_trace("FAILED plaintext archive reset"); return 0; }
+    /* An ordinary plain job must not produce a notice or an encrypted marker. */
+    job = (ui_job *)calloc(1, sizeof(*job));
+    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    job->archive_path = copy_text("plaintext-smoke.arc");
+    if (!job->archive_path) { job_destroy(job); return 0; }
+    xxwidgets_widget_set_text(ui->archive_path, job->archive_path);
+    job->done = 1; job->request.command = XFU_COMMAND_LIST;
+    ui->job = job; drain_job(ui);
+    okay = !ui->job && !ui->archive_encrypted && ui->encryption_notices == before + 1;
+    if (!okay) { encryption_smoke_trace("FAILED plaintext job suppression"); return 0; }
+    encryption_smoke_trace("plaintext reset/job passed; completing readable encrypted listing");
+    /* Listing readable encrypted members also needs the informational notice
+     * when the user has not supplied or recovered a usable password. */
+    job = (ui_job *)calloc(1, sizeof(*job));
+    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    job->archive_path = copy_text("plaintext-smoke.arc");
+    if (!job->archive_path) { job_destroy(job); return 0; }
+    job->done = 1; job->request.command = XFU_COMMAND_LIST;
+    job_entry(job, &encrypted);
+    job_encryption(job, XFU_ENCRYPTION_DETECTED, encrypted.name);
+    ui->job = job; set_busy(ui, 1);
+    if (!smoke_finish_encryption_job(ui) || ui->encryption_notices != before + 2 ||
+        xxwidgets_widget_has_focus(ui->password) != 1) { encryption_smoke_trace("FAILED readable encrypted notice/focus"); return 0; }
+    encryption_smoke_trace("readable encrypted notice passed");
+    /* A supplied password suppresses only that informational notice. */
+    job = (ui_job *)calloc(1, sizeof(*job));
+    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    job->archive_path = copy_text("plaintext-smoke.arc");
+    if (!job->archive_path) { job_destroy(job); return 0; }
+    job->done = 1; job->request.command = XFU_COMMAND_LIST; job->request.password = "public-smoke-password";
+    job_encryption(job, XFU_ENCRYPTION_DETECTED, NULL);
+    ui->job = job; drain_job(ui);
+    if (ui->encryption_notices != before + 2) { encryption_smoke_trace("FAILED supplied password suppression"); return 0; }
+    /* Cancellation cannot open a password dialog, even with a pending event. */
+    job = (ui_job *)calloc(1, sizeof(*job));
+    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    job->archive_path = copy_text("plaintext-smoke.arc");
+    if (!job->archive_path) { job_destroy(job); return 0; }
+    job->done = job->cancel_requested = 1; job->result = 1; job->request.command = XFU_COMMAND_TEST;
+    job_encryption(job, XFU_ENCRYPTION_PASSWORD_REQUIRED, NULL);
+    ui->job = job; drain_job(ui);
+    okay = !ui->job && ui->encryption_notices == before + 2;
+    xxwidgets_widget_set_visible(ui->window, 0);
+    fprintf(stderr, "Encryption UI smoke: notice=%u focus=Password encrypted/plain markers=%s\n",
+        ui->encryption_notices - before, okay ? "OK" : "FAILED");
+    return okay;
+}
 
 static int smoke_widgets(ui_state *ui)
 {
+    if (ui->encryption_smoke) return smoke_encryption(ui);
+    /* Unpack interpretations are independent choices, not an eight-level
+     * inspection chain. Exercise a larger list and its empty placeholder. */
+    {
+        xx_list_t *supported = xx_format_get_supported_unpack_handle_types();
+        xx_handle_type_t many[12];
+        ui_job sample = {0};
+        xx_var selected = {0};
+        size_t i;
+        int valid = supported && xx_list_count(supported) >= 12;
+        for (i = 0; valid && i < 12; ++i)
+            many[i] = *(const xx_handle_type_t *)xx_list_at(supported, i);
+        sample.archive_path = "";
+        sample.file_types = many; sample.type_count = 12;
+        sample.selected_type = valid ? many[11] : XX_HANDLE_TYPE_UNKNOWN;
+        if (valid) valid = populate_file_types(ui, &sample) &&
+            xxwidgets_combobox_count(ui->file_type) == 12 && ui->file_type_count == 12 &&
+            xxwidgets_combobox_get_current(ui->file_type, &selected) == XXWIDGETS_OK &&
+            selected.type == XX_VAR_TYPE_UINT32 && selected.val.u32 == (uint32_t)many[11];
+        sample.file_types = NULL; sample.type_count = 0; sample.selected_type = XX_HANDLE_TYPE_UNKNOWN;
+        if (valid) valid = populate_file_types(ui, &sample) &&
+            xxwidgets_combobox_count(ui->file_type) == 1 && ui->file_type_count == 0 &&
+            ui->selected_type == XX_HANDLE_TYPE_UNKNOWN && !archive_actions(ui);
+        xx_list_destroy(supported);
+        if (!valid) return 0;
+    }
+
     xxwidgets_archive_entry entries[] = {
         { "folder/", 0, 1 }, { "folder/hello.txt", 123, 0 },
         { "Unicode-\xd0\xbf\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82.bin", UINT64_C(4294967297), 0 }
@@ -2506,10 +3419,18 @@ static int smoke_widgets(ui_state *ui)
     char path[32];
     char *escaped = display_text("legacy-\x82\xff-\xc0\xaf-\xed\xa0\x80.txt");
     char *unicode = display_text(entries[2].path);
-    int valid_display = escaped && unicode &&
+    /* Bidirectional controls and separators are escaped; their neighbours
+     * (U+200D, U+2030, U+0627) and an accented letter are not. */
+    char *bidi = display_text("n\xc3\xa9\xe2\x80\xae" "evil\xe2\x81\xa6\xe2\x80\x8f\xd8\x9c\xe2\x80\xa8"
+                              "\xe2\x80\x8d\xe2\x80\xb0\xd8\xa7.txt");
+    char *bidi_member = display_member_text("a\xe2\x80\xaa" "b");
+    int valid_display = escaped && unicode && bidi && bidi_member &&
         !strcmp(escaped, "legacy-\\x82\\xFF-\\xC0\\xAF-\\xED\\xA0\\x80.txt") &&
-        !strcmp(unicode, entries[2].path);
-    free(escaped); free(unicode);
+        !strcmp(unicode, entries[2].path) &&
+        !strcmp(bidi, "n\xc3\xa9\\xE2\\x80\\xAE" "evil\\xE2\\x81\\xA6\\xE2\\x80\\x8F\\xD8\\x9C\\xE2\\x80\\xA8"
+                      "\xe2\x80\x8d\xe2\x80\xb0\xd8\xa7.txt") &&
+        !strcmp(bidi_member, "a[E2][80][AA]b");
+    free(escaped); free(unicode); free(bidi); free(bidi_member);
     if (!valid_display) return 0;
     if (xxwidgets_app_backend(ui->app) != ui->backend) return 0;
     {
@@ -2555,6 +3476,27 @@ static int smoke_widgets(ui_state *ui)
         int checked = 0;
         if (xx_get_settings() != ui->settings || !ui->advanced_visible || !ui->log_visible ||
             xxwidgets_widget_get_value(ui->advanced, &checked) != XXWIDGETS_OK || !checked) return 0;
+    }
+    {
+        /* A job's main bar counts members and never moves back; its status
+         * line shows how far the bytes of a pass over the stream have come. */
+        static ui_job job;
+        char *status;
+        int value = -1, valid;
+        memset(&job, 0, sizeof(job));
+        job.request.command = XFU_COMMAND_TEST;
+        job.status_counted = 1;
+        job.status_name = copy_text("big.txt");
+        if (!job.status_name) return 0;
+        job_bar(ui, &job, 60);
+        job_bar(ui, &job, 20);
+        show_job_status(ui, &job, 0, 1, "Reading archive", 45);
+        status = widget_text(ui->status);
+        valid = xxwidgets_widget_get_value(ui->progress, &value) == XXWIDGETS_OK && value == 60 &&
+            status && !strcmp(status, "Testing: 0/1 | Reading archive 45% | big.txt");
+        free(status); free(job.status_name);
+        xxwidgets_widget_set_value(ui->progress, 0);
+        if (!valid) return 0;
     }
 #ifdef _WIN32
     if (desktop_shell(ui)) {
@@ -2642,7 +3584,7 @@ static int smoke_widgets(ui_state *ui)
             ui_job listing = {0};
             xfu_property properties[] = {{"CRC32", "75BCC38E"}, {"Method", "Deflate:Fastest"}};
             xfu_entry document = {0}, nested = {0};
-            xxwidgets_event toggle = {XXWIDGETS_EVENT_CHANGE, ui->advanced, 1, 0, 0};
+            xxwidgets_event toggle = {.type = XXWIDGETS_EVENT_CHANGE, .widget = ui->advanced, .value = 1};
             document.name = "word/document.xml"; document.properties = properties; document.property_count = 2;
             nested.name = "word/theme/theme1.xml";
             listing.archive_path = "document.docx";
@@ -2697,84 +3639,66 @@ static void smoke_file_types(ui_state *ui)
     xx_var value = {0};
     const xx_meta_string *record = NULL;
     xxwidgets_event event = {0};
-    int valid = 1, next = -1;
+    size_t i;
+    int valid = 1, next = -1, change_path = 0;
     if (ui->job || ui->pending_command != XFU_COMMAND_NONE || !ui->running) return;
     if (xxwidgets_combobox_get_current(ui->file_type, &value) != XXWIDGETS_OK ||
         value.type != XX_VAR_TYPE_UINT32) valid = 0;
-    if (ui->type_smoke_stage != 4) {
-        static const wchar_t *labels[] = {L"Binary", L"gzip", L"tar.gz"};
-        size_t i;
-        if (xxwidgets_combobox_count(ui->file_type) != 3) valid = 0;
-        for (i = 0; i < 3; ++i) {
+    if (ui->type_smoke_stage != 3) {
+        static const xx_handle_type_t handles[] = {XX_HANDLE_TYPE_GZ, XX_HANDLE_TYPE_TAR_GZ};
+        if (xxwidgets_combobox_count(ui->file_type) != 2) valid = 0;
+        for (i = 0; i < 2; ++i) {
             if (xxwidgets_combobox_get_record(ui->file_type, i, &record) != XXWIDGETS_OK ||
-                wcscmp(record->meta_string->data, labels[i])) valid = 0;
+                record->var.type != XX_VAR_TYPE_UINT32 || record->var.val.u32 != (uint32_t)handles[i]) valid = 0;
         }
     }
     switch (ui->type_smoke_stage) {
     case 0:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
-        next = 1; break;
+        valid = valid && value.val.u32 == XX_HANDLE_TYPE_TAR_GZ && ui->listed_count == 2;
+        next = 0; break;
     case 1:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_GZ && ui->listed_count == 1 &&
+        valid = valid && value.val.u32 == XX_HANDLE_TYPE_GZ && ui->listed_count == 1 &&
             ui->listed_entries[0].unpacked_size >= 2048;
-        next = 0; break;
+        next = 1; break;
     case 2:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_BINARY && ui->listed_count == 0;
-#ifdef _WIN32
-        if (desktop_shell(ui)) {
-            HWND owner = (HWND)xxwidgets_widget_native_handle(ui->window);
-            valid = valid && !IsWindowEnabled((HWND)xxwidgets_widget_native_handle(ui->extract)) &&
-                !IsWindowEnabled((HWND)xxwidgets_widget_native_handle(ui->test)) &&
-                (GetMenuState(GetSubMenu(GetMenu(owner), 0), 2, MF_BYPOSITION) & MF_GRAYED) &&
-                (GetMenuState(GetSubMenu(GetMenu(owner), 0), 3, MF_BYPOSITION) & MF_GRAYED);
-        }
-#endif
-        next = 2; break;
+        valid = valid && value.val.u32 == XX_HANDLE_TYPE_TAR_GZ && ui->listed_count == 2;
+        change_path = 1; break;
     case 3:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
-        next = 0; break;
+        valid = valid && value.val.u32 == XX_HANDLE_TYPE_ZIP && ui->listed_count == 2 &&
+            xxwidgets_combobox_count(ui->file_type) == 1;
+        change_path = 2; break;
     case 4:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_ZIP && ui->listed_count == 2 &&
-            xxwidgets_combobox_count(ui->file_type) == 2;
-        next = 0; break;
-    case 5:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_BINARY && ui->listed_count == 0;
-        next = 2; break;
-    case 6:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
+        valid = valid && value.val.u32 == XX_HANDLE_TYPE_TAR_GZ && ui->listed_count == 2;
         if (valid) { ui->exit_code = 0; ui->running = 0; return; }
         break;
     default: valid = 0; break;
     }
-    if (valid && next >= 0 && xxwidgets_widget_set_value(ui->file_type, next) == XXWIDGETS_OK) {
-        if (ui->type_smoke_stage == 4) {
-            char *path = widget_text(ui->archive_path), *grown;
-            size_t length = path ? strlen(path) : 0;
+    if (valid && change_path) {
+        char *path = widget_text(ui->archive_path);
+        size_t length = path ? strlen(path) : 0;
+        if (change_path == 1) {
+            if (length < 7 || strcmp(path + length - 7, ".tar.gz")) valid = 0;
+            else memcpy(path + length - 7, ".zip", 5);
+        } else {
+            char *grown;
             if (length < 4 || strcmp(path + length - 4, ".zip")) valid = 0;
-            else if (!(grown = realloc(path, length + 4))) valid = 0;
-            else {
-                path = grown;
-                memcpy(path + length - 4, ".tar.gz", 8);
-                if (xxwidgets_widget_set_text(ui->archive_path, path) != XXWIDGETS_OK) valid = 0;
-            }
-            free(path);
+            else if (!(grown = (char *)realloc(path, length + 4))) valid = 0;
+            else { path = grown; memcpy(path + length - 4, ".tar.gz", 8); }
         }
+        if (valid && xxwidgets_widget_set_text(ui->archive_path, path) != XXWIDGETS_OK) valid = 0;
+        free(path);
+        if (valid) {
+            ui->type_chosen = 0;
+            if (!clear_members(ui)) valid = 0;
+            else ui->pending_command = XFU_COMMAND_LIST;
+        }
+    } else if (valid && next >= 0 && xxwidgets_widget_set_value(ui->file_type, next) == XXWIDGETS_OK) {
         event.type = XXWIDGETS_EVENT_SELECT; event.widget = ui->file_type; event.value = next;
         on_event(ui->app, &event, ui);
-        valid = valid && ui->listed_count == 0;
-        if (ui->type_smoke_stage == 3) {
-            char *path = widget_text(ui->archive_path);
-            size_t length = path ? strlen(path) : 0;
-            if (length < 7 || strcmp(path + length - 7, ".tar.gz")) valid = 0;
-            else {
-                memcpy(path + length - 7, ".zip", 5);
-                if (xxwidgets_widget_set_text(ui->archive_path, path) != XXWIDGETS_OK) valid = 0;
-            }
-            free(path);
-        }
-        ++ui->type_smoke_stage;
-        if (valid) return;
-    }
+        valid = ui->listed_count == 0;
+    } else valid = 0;
+    if (valid) { ++ui->type_smoke_stage; return; }
+    show_status(ui, "Unpack handle selection smoke failed.");
     ui->exit_code = 2; ui->running = 0;
 }
 
@@ -2859,7 +3783,7 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
     ui_state ui;
     const char *archive = "", *output = ".", *password = NULL;
     xfu_command startup = XFU_COMMAND_NONE;
-    int i, have_archive = 0, have_command = 0, end_options = 0;
+    int i, have_archive = 0, have_command = 0, end_options = 0, have_handle = 0;
     xxfc_status_t settings_load_status;
 #ifdef _WIN32
     smoke_console console;
@@ -2868,10 +3792,15 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
 #endif
     memset(&ui, 0, sizeof(ui));
     ui.backend = backend;
+#ifdef SIGXFSZ
+    /* A write past the file size limit fails (EFBIG), as a full disk does,
+     * instead of ending the process. */
+    signal(SIGXFSZ, SIG_IGN);
+#endif
     /* Test invocations must report failure through their exit code, including
      * invalid startup arguments, without waiting for a modal error dialog. */
     for (i = 1; i < argc && strcmp(argv[i], "--"); ++i)
-        if (!strcmp(argv[i], "--smoke-test") || !strcmp(argv[i], "--smoke-file-types") ||
+        if (!strcmp(argv[i], "--smoke-test") || !strcmp(argv[i], "--smoke-encryption") || !strcmp(argv[i], "--smoke-file-types") ||
             !strcmp(argv[i], "--smoke-password-embedded") || !strcmp(argv[i], "--smoke-password-manual") ||
             !strcmp(argv[i], "--smoke-password-retrieve") ||
             !strncmp(argv[i], "--smoke-progress-", 17)) ui.smoke = 1;
@@ -2882,6 +3811,7 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
             return 0;
         }
         if (!end_options && !strcmp(argument, "--smoke-test")) { ui.smoke = 1; continue; }
+        if (!end_options && !strcmp(argument, "--smoke-encryption")) { ui.smoke = ui.encryption_smoke = 1; continue; }
         if (!end_options && !strcmp(argument, "--smoke-file-types")) {
             ui.smoke = ui.type_smoke = 1; continue;
         }
@@ -2901,6 +3831,15 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
             continue;
         }
         if (!end_options && !strcmp(argument, "--")) { end_options = 1; continue; }
+        if (!end_options && (!strcmp(argument, "--handle") || !strncmp(argument, "--handle=", 9))) {
+            const char *name = argument[8] == '=' ? argument + 9 : i + 1 < argc ? argv[++i] : NULL;
+            if (have_handle || !parse_unpack_handle(name, &ui.startup_handle)) {
+                if (!ui.smoke) report(backend, "--handle: specify one supported unpack handle name or enum ID.", 1);
+                return 2;
+            }
+            have_handle = 1;
+            continue;
+        }
         if (!end_options && !strncmp(argument, "-o", 2) && argument[2]) { output = argument + 2; continue; }
         if (!end_options && !strncmp(argument, "-p", 2)) {
             if (password) {
@@ -2928,6 +3867,20 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
     }
     if (have_command && !have_archive) {
         if (!ui.smoke) report(backend, "A command requires an archive path.", 1);
+        return 2;
+    }
+    if (have_handle && !have_archive) {
+        if (!ui.smoke) report(backend, "--handle requires an archive path.", 1);
+        return 2;
+    }
+    /* The fields hold UTF-8 text; say so before the interface takes the
+     * screen (the terminal edition's alternate screen would hide it). */
+    if (archive && !utf8_text(archive)) {
+        if (!ui.smoke) report(backend, "The archive path is not valid UTF-8; rename it to open it here, or open it with xfu.", 1);
+        return 2;
+    }
+    if (output && !utf8_text(output)) {
+        if (!ui.smoke) report(backend, "The output folder is not valid UTF-8 text: choose another folder.", 1);
         return 2;
     }
     if (have_archive && startup == XFU_COMMAND_NONE) startup = XFU_COMMAND_LIST;
@@ -2970,6 +3923,16 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
     if (!password_archive_changed(&ui, archive) ||
         (password && !set_automatic_password(&ui, password))) {
         ui.exit_code = 2; goto cleanup;
+    }
+    if (ui.encryption_smoke && have_archive) {
+        ui.exit_code = 2; goto cleanup;
+    }
+    if (have_handle) {
+        ui.pending_type_path = copy_text(archive);
+        if (!ui.pending_type_path) { ui.exit_code = 2; goto cleanup; }
+        ui.selected_type = ui.startup_handle;
+        ui.type_chosen = ui.startup_handle != XX_HANDLE_TYPE_UNKNOWN;
+        ui.startup_handle_pending = 1;
     }
     if (password) ui.password_manual = 1;
     if (settings_load_status != XXFC_OK) show_status(&ui, "Cannot load application settings. Using defaults.");
@@ -3082,7 +4045,9 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
 cleanup:
     if (ui.job) { cancel_job(&ui); job_destroy(ui.job); }
     free_entries(ui.listed_entries, ui.listed_count);
+    free(ui.browser_sources);
     free(ui.file_types_path);
+    free(ui.offered_types);
     free(ui.members_archive);
     free(ui.pending_type_path);
     free(ui.password_archive);

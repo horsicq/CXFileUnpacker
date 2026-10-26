@@ -2,6 +2,16 @@ cmake_minimum_required(VERSION 3.21)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/release_version.txt" XFILEUNPACKER_VERSION LIMIT_COUNT 1)
 project(XFileUnpacker VERSION "${XFILEUNPACKER_VERSION}" DESCRIPTION "C archive unpacker with console, GUI and TUI frontends" LANGUAGES C)
 
+# Compile only the optional format streams used by this application.
+if(NOT TARGET xxfclib::xxfclib)
+    set(XXFC_ENABLE_STREAM_DATASTRUCTS OFF)
+    set(XXFC_ENABLE_STREAM_IMPORT OFF)
+    set(XXFC_ENABLE_STREAM_EXPORT OFF)
+    set(XXFC_ENABLE_STREAM_RESOURCES OFF)
+    set(XXFC_ENABLE_STREAM_METADATA OFF)
+    set(XXFC_ENABLE_STREAM_SYMBOLS OFF)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -11,8 +21,8 @@ set(XFILEUNPACKER_XXWIDGETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dep/xxwidgets" CACH
 option(XFILEUNPACKER_BUILD_GUI "Build the native desktop frontend" ON)
 option(XFILEUNPACKER_BUILD_TUI "Build the terminal frontend" ON)
 
-if(NOT EXISTS "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack/xxfc_readers.c")
-    message(FATAL_ERROR "XFILEUNPACKER_XXFCLIB_DIR must point to xxfclib with samples/unpack")
+if(NOT EXISTS "${XFILEUNPACKER_XXFCLIB_DIR}/src/xfileunpacker/xxfc_readers.c")
+    message(FATAL_ERROR "XFILEUNPACKER_XXFCLIB_DIR must contain the xxfclib unpacker engine")
 endif()
 
 function(xfu_c_target target)
@@ -27,95 +37,50 @@ function(xfu_c_target target)
         target_compile_definitions(${target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     else()
         target_compile_definitions(${target} PRIVATE _POSIX_C_SOURCE=200809L)
+        if(APPLE)
+            # AppKit's system headers use Darwin's BSD networking typedefs.
+            target_compile_definitions(${target} PRIVATE _DARWIN_C_SOURCE)
+        endif()
+    endif()
+    get_target_property(_target_type ${target} TYPE)
+    if(_target_type STREQUAL "EXECUTABLE")
+        if(MINGW)
+            target_link_options(${target} PRIVATE $<$<CONFIG:Release>:-s>)
+        endif()
     endif()
 endfunction()
 
-if(NOT TARGET xxfclib::xxformats)
-    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/xxformats.cmake")
-    add_library(xxfclib_formats STATIC ${XXFORMATS_SOURCES})
-    add_library(xxfclib::xxformats ALIAS xxfclib_formats)
-    target_include_directories(xxfclib_formats
-        PUBLIC "${XXFORMATS_INCLUDE_DIR}"
-        PRIVATE ${XXFORMATS_INCLUDE_DIRS})
-    target_compile_definitions(xxfclib_formats PUBLIC XXFC_STATIC PRIVATE XXFC_FORMATS_ONLY)
-    target_link_libraries(xxfclib_formats PUBLIC ${XXFORMATS_LIBRARIES})
-    target_compile_features(xxfclib_formats PRIVATE c_std_11)
-    set_target_properties(xxfclib_formats PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    if(MSVC)
-        # MSBuild's --parallel splits projects; /MP also compiles the large
-        # reader collection in parallel inside its library project.
-        target_compile_options(xxfclib_formats PRIVATE /W4 /utf-8 /MP8)
-        target_compile_definitions(xxfclib_formats PRIVATE _CRT_SECURE_NO_WARNINGS)
-    else()
-        # Some xxfclib readers use standard functions without including their headers.
-        target_compile_options(xxfclib_formats PRIVATE -Wall -Wextra -Wpedantic
-            "SHELL:-include string.h" "SHELL:-include stdlib.h")
-        if(NOT WIN32)
-            # The WIM pipe client uses WEP_UNIX where the socket API defines AF_UNIX.
-            target_compile_definitions(xxfclib_formats PRIVATE
-                _POSIX_C_SOURCE=200809L WEP_UNIX=AF_UNIX)
-        endif()
-    endif()
-    # Third-party code kept as upstream ships it: the SQLite amalgamation,
-    # bzip2 (via NSIS), the zlib deflate encoder FEAD carries, and Brotli's
-    # dictionary table. Their known warnings are switched off here, file by
-    # file and warning by warning, so an update stays a drop-in copy and any
-    # other warning they raise still shows.
-    set(_xfu_upstream "${XFILEUNPACKER_XXFCLIB_DIR}/src")
-    set(_xfu_zlib_encoder deflate trees adler32 crc32 compress)
-    list(TRANSFORM _xfu_zlib_encoder PREPEND "${_xfu_upstream}/formats/fead/encoder/")
-    list(TRANSFORM _xfu_zlib_encoder APPEND ".c")
-    if(MSVC)
-        # C4200 flexible array members; C4131 K&R definitions; C4127 constant
-        # conditions; C4244 narrowing upstream relies on; C4702 unreachable code.
-        set_source_files_properties("${_xfu_upstream}/formats/sqlite_sql/xx_sqlite_amalgamation.c"
-            PROPERTIES COMPILE_OPTIONS "/wd4200")
-        set_source_files_properties("${_xfu_upstream}/formats/nsis/nsis_bzip2.c"
-            PROPERTIES COMPILE_OPTIONS "/wd4127;/wd4244;/wd4702")
-        set_source_files_properties(${_xfu_zlib_encoder}
-            PROPERTIES COMPILE_OPTIONS "/wd4131;/wd4127;/wd4244")
-    else()
-        # bzip2's state machine falls through on purpose; the Brotli dictionary
-        # is one string longer than ISO C's minimum-supported length.
-        set_source_files_properties("${_xfu_upstream}/formats/nsis/nsis_bzip2.c"
-            PROPERTIES COMPILE_OPTIONS "-Wno-implicit-fallthrough")
-        set_source_files_properties("${_xfu_upstream}/algo/brotli/xx_brotli_data.c"
-            PROPERTIES COMPILE_OPTIONS "-Wno-overlength-strings")
-        if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-            # GCC-only options: Clang warns about names it does not know.
-            # GCC 15 follows a null column name into sqlite3ColumnSetColl's
-            # second strlen, a path SQLite never takes once a type is set;
-            # GCC 16 counts nIdx's loop increment as no use, and reports its
-            # own 8-byte vector stores into bzip2's six-entry selector table.
-            set_source_files_properties("${_xfu_upstream}/formats/sqlite_sql/xx_sqlite_amalgamation.c"
-                PROPERTIES COMPILE_OPTIONS "-Wno-stringop-overread;-Wno-unused-but-set-variable")
-            set_source_files_properties("${_xfu_upstream}/formats/nsis/nsis_bzip2.c"
-                PROPERTIES COMPILE_OPTIONS "-Wno-implicit-fallthrough;-Wno-stringop-overflow")
-        endif()
-    endif()
+if(NOT TARGET xxfclib::xxfclib)
+    # Codec and archive code belongs to the prepared xxfclib tree. Keep this
+    # build independent of package managers, FetchContent and network access.
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libraries" FORCE)
+    set(XXFC_BUILD_BOTH OFF CACHE BOOL "Build one xxfclib variant" FORCE)
+    set(XXFC_BUILD_PROFILE formats CACHE STRING
+        "Build the self-contained xxfclib formats profile" FORCE)
+    add_subdirectory("${XFILEUNPACKER_XXFCLIB_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}/deps/xxfclib" EXCLUDE_FROM_ALL)
 endif()
 
-add_library(xfileunpacker_core STATIC
-    src/core.c src/core.h src/metadata.c src/metadata.h
-    src/information.c src/information.h
-    src/supported_types.c src/supported_types.h
-    "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack/xxfc_readers.c")
-target_include_directories(xfileunpacker_core PUBLIC src PRIVATE "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
-target_compile_definitions(xfileunpacker_core PRIVATE XXFC_FORMATS_ONLY)
-target_link_libraries(xfileunpacker_core PUBLIC xxfclib::xxformats)
-xfu_c_target(xfileunpacker_core)
+# The complete archive engine is an xxfclib component.  This application
+# directory now contains only the frontends, platform shell integration,
+# packaging and tests.
+include("${XFILEUNPACKER_XXFCLIB_DIR}/cmake/xxfclib_xfileunpacker.cmake")
 
 # Offline helper for refreshing xxfclib's static extension detector table.
-add_executable(xfileunpacker_dump_extensions EXCLUDE_FROM_ALL
-    "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack/dump_extensions.c")
-target_include_directories(xfileunpacker_dump_extensions PRIVATE
-    "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack")
-target_link_libraries(xfileunpacker_dump_extensions PRIVATE xfileunpacker_core)
-xfu_c_target(xfileunpacker_dump_extensions)
+if(EXISTS "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack/dump_extensions.c")
+    add_executable(xfileunpacker_dump_extensions EXCLUDE_FROM_ALL
+        "${XFILEUNPACKER_XXFCLIB_DIR}/samples/unpack/dump_extensions.c")
+    target_include_directories(xfileunpacker_dump_extensions PRIVATE
+        "${XFILEUNPACKER_XXFCLIB_DIR}/src/xfileunpacker")
+    target_link_libraries(xfileunpacker_dump_extensions PRIVATE xxfclib::xfileunpacker_core)
+    xfu_c_target(xfileunpacker_dump_extensions)
+endif()
 
 add_executable(XFileUnpacker src/cli.c)
 set_target_properties(XFileUnpacker PROPERTIES OUTPUT_NAME xfu)
-target_link_libraries(XFileUnpacker PRIVATE xfileunpacker_core)
+target_compile_definitions(XFileUnpacker PRIVATE
+    XFU_APPLICATION_VERSION="${PROJECT_VERSION}")
+target_link_libraries(XFileUnpacker PRIVATE xxfclib::xfileunpacker_core)
 if(WIN32)
     target_link_libraries(XFileUnpacker PRIVATE shell32)
 endif()
@@ -125,21 +90,21 @@ if(XFILEUNPACKER_BUILD_GUI OR XFILEUNPACKER_BUILD_TUI)
     if(NOT TARGET xxwidgets::xxwidgets)
         set(XXWIDGETS_BUILD_SETTINGS OFF)
         set(XXWIDGETS_XXFCLIB_DIR "${XFILEUNPACKER_XXFCLIB_DIR}")
+        if(XFILEUNPACKER_BUILD_TUI AND NOT XFILEUNPACKER_BUILD_GUI)
+            set(XXWIDGETS_NATIVE_BACKEND none CACHE STRING
+                "Disable native GUI dependencies for a TUI-only build" FORCE)
+        endif()
         add_subdirectory("${XFILEUNPACKER_XXWIDGETS_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/deps/xxwidgets" EXCLUDE_FROM_ALL)
     endif()
     if(NOT TARGET xxwidgets::settings)
-        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/xxsettings.cmake")
         add_library(xfileunpacker_widget_settings STATIC
-            "${XFILEUNPACKER_XXWIDGETS_DIR}/src/xxwidgets_settings.c"
-            ${XXSETTINGS_SOURCES})
+            "${XFILEUNPACKER_XXWIDGETS_DIR}/src/xxwidgets_settings.c")
         add_library(xxwidgets::settings ALIAS xfileunpacker_widget_settings)
         set_target_properties(xfileunpacker_widget_settings PROPERTIES POSITION_INDEPENDENT_CODE ON)
         target_include_directories(xfileunpacker_widget_settings PUBLIC
-            "${XFILEUNPACKER_XXWIDGETS_DIR}/include"
-            "${XXSETTINGS_INCLUDE_DIR}")
-        target_compile_definitions(xfileunpacker_widget_settings PUBLIC XXFC_STATIC)
+            "${XFILEUNPACKER_XXWIDGETS_DIR}/include")
         target_link_libraries(xfileunpacker_widget_settings PUBLIC
-            xxwidgets::xxwidgets ${XXSETTINGS_LIBRARIES})
+            xxwidgets::xxwidgets xxfclib::xxfclib)
         xfu_c_target(xfileunpacker_widget_settings)
     endif()
     find_package(Threads REQUIRED)
@@ -149,7 +114,7 @@ if(XFILEUNPACKER_BUILD_GUI OR XFILEUNPACKER_BUILD_TUI)
         target_sources(xfileunpacker_ui PRIVATE src/native_shell.c src/native_shell.h)
         target_link_libraries(xfileunpacker_ui PRIVATE user32 gdi32 comctl32 shell32 comdlg32 ole32)
     endif()
-    target_link_libraries(xfileunpacker_ui PUBLIC xfileunpacker_core xxwidgets::settings Threads::Threads)
+    target_link_libraries(xfileunpacker_ui PUBLIC xxfclib::xfileunpacker_core xxwidgets::settings Threads::Threads)
     xfu_c_target(xfileunpacker_ui)
     if(XFILEUNPACKER_BUILD_GUI)
         if(XXWIDGETS_NATIVE_BACKEND STREQUAL "none")
@@ -186,9 +151,147 @@ include(packaging/icons.cmake)
 include(cmake/format_additions.cmake)
 include(cmake/uniextract_formats.cmake)
 include(cmake/wim_legacy_formats.cmake)
+include(cmake/native_container_formats.cmake)
 
 install(TARGETS XFileUnpacker RUNTIME DESTINATION bin)
 install(FILES README.md LICENSE DESTINATION share/doc/XFileUnpacker)
+install(FILES docs/ARCHIVE_FORMATS.md docs/PEAZIP_FORMATS.md docs/FREEARC_WRITER.md DESTINATION share/doc/XFileUnpacker)
+install(FILES docs/LEGACY_CODECS_NOTICE.md docs/SPLIT_FORMAT.md docs/SPECIALIZED_FORMATS.md DESTINATION share/doc/XFileUnpacker)
+include(CTest)
+if(BUILD_TESTING)
+    if(WIN32)
+        find_program(XFU_POWERSHELL_EXECUTABLE NAMES powershell pwsh)
+        if(XFU_POWERSHELL_EXECUTABLE)
+            foreach(_encryption_frontend IN ITEMS XFileUnpackerGUI XFileUnpackerTUI)
+                if(TARGET ${_encryption_frontend})
+                    add_test(NAME ${_encryption_frontend}_encryption_notice
+                        COMMAND "${XFU_POWERSHELL_EXECUTABLE}" -NoProfile -NonInteractive
+                            -ExecutionPolicy Bypass -File
+                            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_encryption_ui_smoke.ps1"
+                            -Executable "$<TARGET_FILE:${_encryption_frontend}>")
+                    set_tests_properties(${_encryption_frontend}_encryption_notice
+                        PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+                endif()
+            endforeach()
+        endif()
+    endif()
+    add_executable(xfu_structured_escape_test tests/test_structured_escape.c)
+    target_link_libraries(xfu_structured_escape_test PRIVATE xxfclib::xfileunpacker_core)
+    if(WIN32)
+        target_link_libraries(xfu_structured_escape_test PRIVATE shell32)
+    endif()
+    xfu_c_target(xfu_structured_escape_test)
+    add_test(NAME xfu_structured_escape COMMAND xfu_structured_escape_test)
+    add_executable(xfu_archive_core_test tests/test_archive_core.c)
+    target_link_libraries(xfu_archive_core_test PRIVATE xxfclib::xfileunpacker_core)
+    xfu_c_target(xfu_archive_core_test)
+    add_test(NAME xfu_archive_core COMMAND xfu_archive_core_test
+        "${CMAKE_CURRENT_BINARY_DIR}/archive-core-test")
+    add_executable(xfu_encryption_notifications_test tests/test_encryption_notifications.c)
+    target_link_libraries(xfu_encryption_notifications_test PRIVATE xxfclib::xfileunpacker_core)
+    xfu_c_target(xfu_encryption_notifications_test)
+    add_test(NAME xfu_encryption_notifications COMMAND xfu_encryption_notifications_test
+        "${XFILEUNPACKER_XXFCLIB_DIR}/tests/fixtures/freearc_encrypted"
+        "${CMAKE_CURRENT_BINARY_DIR}/encryption-notifications-test")
+    add_executable(xfu_native_reader_backend_test tests/test_native_reader_backend.c)
+    target_link_libraries(xfu_native_reader_backend_test PRIVATE xxfclib::xfileunpacker_core)
+    xfu_c_target(xfu_native_reader_backend_test)
+    add_test(NAME xfu_native_reader_backend COMMAND xfu_native_reader_backend_test
+        "${CMAKE_CURRENT_BINARY_DIR}/native-reader-test")
+    add_executable(xfu_specialized_core_test tests/test_specialized_core.c)
+    target_link_libraries(xfu_specialized_core_test PRIVATE xxfclib::xfileunpacker_core)
+    xfu_c_target(xfu_specialized_core_test)
+    add_test(NAME xfu_specialized_core COMMAND xfu_specialized_core_test
+        "${CMAKE_CURRENT_BINARY_DIR}/specialized-core-test")
+    foreach(_format_test IN ITEMS scummvm_dxa_native freearc_encrypted_native)
+        add_executable(xfu_${_format_test}_test
+            "${XFILEUNPACKER_XXFCLIB_DIR}/tests/test_${_format_test}.c")
+        target_link_libraries(xfu_${_format_test}_test PRIVATE xxfclib::xxfclib)
+        xfu_c_target(xfu_${_format_test}_test)
+        if(_format_test STREQUAL "freearc_encrypted_native")
+            add_test(NAME xfu_${_format_test} COMMAND xfu_${_format_test}_test
+                "${XFILEUNPACKER_XXFCLIB_DIR}/tests/fixtures/freearc_encrypted")
+        else()
+            add_test(NAME xfu_${_format_test} COMMAND xfu_${_format_test}_test)
+        endif()
+    endforeach()
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    add_executable(xfu_lzip_prefix_test tests/test_lzip_prefix.c)
+    target_link_libraries(xfu_lzip_prefix_test PRIVATE xxfclib::xxfclib)
+    xfu_c_target(xfu_lzip_prefix_test)
+    add_test(NAME xfu_lzip_prefix COMMAND xfu_lzip_prefix_test)
+    foreach(_recovery_test IN ITEMS pfx_prefix_native recovery_tail_readers legacy_output_names pftw_new_header_native)
+        add_executable(xfu_${_recovery_test}_test
+            "${XFILEUNPACKER_XXFCLIB_DIR}/tests/test_${_recovery_test}.c")
+        target_link_libraries(xfu_${_recovery_test}_test PRIVATE xxfclib::xxfclib)
+        xfu_c_target(xfu_${_recovery_test}_test)
+        add_test(NAME xfu_${_recovery_test} COMMAND xfu_${_recovery_test}_test)
+    endforeach()
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME xfu_encryption_notices_cli
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_encryption_notices.py"
+                "$<TARGET_FILE:XFileUnpacker>"
+                "${XFILEUNPACKER_XXFCLIB_DIR}/tests/fixtures/freearc_encrypted")
+        add_test(NAME xfu_freearc_encrypted_cli
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_freearc_encrypted.py"
+                "$<TARGET_FILE:XFileUnpacker>"
+                "${XFILEUNPACKER_XXFCLIB_DIR}/tests/fixtures/freearc_encrypted")
+        add_test(NAME xfu_arc_recovery_formats
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_arc_recovery_formats.py"
+                "$<TARGET_FILE:XFileUnpacker>")
+        add_executable(xfu_unpack_handle_types_test tests/test_unpack_handle_types.c)
+        target_link_libraries(xfu_unpack_handle_types_test PRIVATE xxfclib::xxfclib)
+        xfu_c_target(xfu_unpack_handle_types_test)
+        add_test(NAME xfu_unpack_handle_fixtures
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/create_unpack_handle_fixtures.py"
+                "${CMAKE_CURRENT_BINARY_DIR}/unpack-handle-fixtures")
+        set_tests_properties(xfu_unpack_handle_fixtures PROPERTIES FIXTURES_SETUP unpack_handle_fixtures)
+        add_test(NAME xfu_unpack_handle_types COMMAND xfu_unpack_handle_types_test
+            "${CMAKE_CURRENT_BINARY_DIR}/unpack-handle-fixtures")
+        set_tests_properties(xfu_unpack_handle_types PROPERTIES FIXTURES_REQUIRED unpack_handle_fixtures)
+        add_test(NAME xfu_archive_compat
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_archive_compat.py"
+                "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME xfu_archive_feature_contract
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_archive_feature_contract.py"
+                "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME xfu_native_writers
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_writers.py"
+                "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME xfu_pea_compat
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pea_compat.py"
+                "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME xfu_freearc_compat
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_freearc_compat.py"
+                "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME xfu_split_compat
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_split_compat.py"
+                "$<TARGET_FILE:XFileUnpacker>")
+        set(_xfu_capability_contract_args "$<TARGET_FILE:XFileUnpacker>")
+        if(WIN32 AND XFILEUNPACKER_BUILD_FREEARC_SFX)
+            list(APPEND _xfu_capability_contract_args --expect-freearc-sfx)
+        endif()
+        add_test(NAME xfu_xxfclib_only_capabilities
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_xxfclib_only_capabilities.py"
+                ${_xfu_capability_contract_args})
+        unset(_xfu_capability_contract_args)
+        if(WIN32 AND XFILEUNPACKER_BUILD_FREEARC_SFX)
+            add_test(NAME xfu_freearc_sfx_compat
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_freearc_sfx_compat.py"
+                    "$<TARGET_FILE:XFileUnpacker>")
+        endif()
+    endif()
+endif()
 if(TARGET XFileUnpackerGUI)
     install(TARGETS XFileUnpackerGUI RUNTIME DESTINATION bin BUNDLE DESTINATION .)
     install(FILES shortcuts.ini DESTINATION bin)

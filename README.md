@@ -8,15 +8,36 @@ A C11 archive unpacker with three applications built from one CMake project:
 | `XFileUnpacker` | Native xxwidgets desktop interface |
 | `xfut` | xxwidgets terminal interface |
 
-Format handling comes from `cmake/xxformats.cmake` in this project,
-which builds the formats and algorithms with their runtime support, without
-`die_engine`, the JavaScript interpreter or `cdisasm`. The reader table is compiled
-directly from its `samples/unpack/xxfc_readers.c`, so format updates do not
-require copying the table into this project. The GUI and TUI use
-`dep/xxwidgets`, including the reusable `XXWIDGETS_ARCHIVEBROWSER`
+Format handling comes directly from the local xxfclib source tree selected by
+`XFILEUNPACKER_XXFCLIB_DIR`. Its `xxfclib::xfileunpacker_core` component builds
+the formats, algorithms, readers, writers and shared application engine needed
+by all three frontends, without `die_engine`, the JavaScript interpreter or
+`cdisasm`. Its reader bridge uses xxfclib's format-owned native factories, so
+format updates do not require copying a reader table into this project. The GUI and TUI use
+the local xxwidgets tree selected
+by `XFILEUNPACKER_XXWIDGETS_DIR`, including the reusable `XXWIDGETS_ARCHIVEBROWSER`
 desktop widget and compact `XXWIDGETS_ARCHIVEVIEW` terminal view. The applications are written in C; they do not
 use Qt or C++. On macOS, the native xxwidgets backend uses its existing
 private AppKit bridge in Objective-C.
+
+Encrypted archives are marked explicitly in every frontend. GUI and TUI show
+an encrypted archive status and member details; the desktop member table also
+marks encrypted rows in Attributes. When a password is needed, one notice
+explains the situation and moves focus to the Password field. Readable encrypted
+listings also notify users who have not supplied a password. Dismissing a notice
+does not retry the operation automatically. Cancellation and closing do not open
+password notices.
+
+The console marks encrypted listing entries and explains how to supply a password
+with `-p<password>` or `--password-env=<name>` without reading stdin. JSON/XML
+include an `encrypted` flag on entries and typed `encryption` events. Failed
+decryption reports that the password may be incorrect or the encrypted data
+damaged; ordinary parse errors do not imply encryption.
+
+The native container readers cover 44 variants, including
+compressed streams, game/resource packages, disk wrappers and installers.
+The console, GUI and TUI use the same readers. See
+[native container formats](docs/NATIVE_CONTAINER_FORMATS.md) for the format list and remaining limits.
 
 HxC disk images have additional native container/track readers and explicit raw
 geometry profiles. Use `xfu --raw-profiles` to list geometries and
@@ -48,12 +69,12 @@ inspection APIs for PE, ELF, Mach-O, DEX, JPEG, PNG, APK, ZIP, ISO and PYC, as
 well as PDF. Their existing native extractors remain registered.
 
 Additional readers unpack ExcelsiorII1 installers, classic/current SuperDAT LH1
-packages, FEAD packages using the verified Adobe Reader 7.0 layout, UHARC 0.6
-archives and DGCA 1.10 archives. FEAD restores cabinet members beneath each
+packages, FEAD packages using the verified Adobe Reader 7.0 layout and DGCA
+1.10 archives. FEAD restores cabinet members beneath each
 container's directory name and labels preserved carrier bytes explicitly;
 other optimizer layouts are rejected.
-UHARC uses a bounded Windows RAM I/O bridge with the redistributable original
-UnUHARC 0.6b, subject to its version, licensing and resource limits.
+UHARC 0.6 remains detectable in the format catalog, but listing and extraction
+are unavailable because this build disables the external UnUHARC process.
 DGCA uses an independent native reader for stored, solid, non-solid and password
 archives, including validated IARC versions 001/990/a90 and Unicode names and
 passwords. Listing and TEST use borrowed
@@ -66,26 +87,79 @@ remain unsupported.
 
 Recognized types and registered handlers do not imply complete extraction
 or writing support.
-`--reader garbro` or `--reader garbro:TAG` selects the game engine explicitly;
-automatic fallback uses catalog signatures and extensions. Magicless game files
-renamed to an unrelated suffix may need explicit reader selection.
 
-The GUI and TUI have a **File type** combobox populated from the detected
-format chain. A `sample.tar.gz` file offers `Binary`, `gzip`, and `tar.gz`,
-with `tar.gz` selected automatically. Selecting `gzip` shows the contained
-TAR payload as one member; selecting `tar.gz` shows its files and folders.
-Listing, extraction, and testing use the selected interpretation. `Binary`
-clears the archive listing and disables extraction and testing. Opening a
-different file detects its types and selects the most specific one again.
-Detection starts with xxfclib's separate extension-first fast detector,
-`xx_format_get_file_type_device_fast()`. Its static suffix lookup performs no
-file reads or reader construction and handles case and compound suffixes such
-as `.tar.gz`. XFileUnpacker validates and parses the suggested reader before
-accepting it. Unknown or ambiguous suffixes, and rejected extension hints, use
-the content detector, `xx_format_get_file_type_device()`. Thus a valid `.gz`
-stream opens as gzip first, while a
-renamed file can still be recognized by content. If content remains Binary,
-the existing validated extension fallback also tries signatureless formats.
+ScummVM DXA video (`DEXA`) has a separate `SCUMMVM_DXA` handle from DxLib
+resource archives. Extraction exports an embedded `audio.wav` and decoded
+`frame-000001.bmp` images. Keyframes (method 2), XOR deltas (3), unchanged
+frames and palette changes are supported; methods 12/13 and extended headers
+are rejected. See the xxfclib `video/scummvm_dxa` reader documentation for bounds.
+
+FreeArc reading supports password-protected AES-256/CTR footer, directory and
+solid data blocks, including legacy and corrected `:f` encodings. Supply a
+password with `-p<password>` or `--password-env=<name>`; encrypted metadata
+requires the password even for listing. Other compression stages still need
+native reader support. Controls are limited to 64 MiB and solid output to
+256 MiB. Key files, other ciphers and custom AES rounds are unsupported.
+The native archive backend provides selectable archive writers and independent
+stream filters. `xfu --capabilities` reports the available read/create
+operations; the same table is included in `--formats` and the GUI/TUI
+supported-types dialog. See [archive formats](docs/ARCHIVE_FORMATS.md)
+for selector names and format-specific limits.
+
+The [PeaZip comparison](docs/PEAZIP_FORMATS.md) distinguishes available
+in-process operations from helper-backed operations disabled in this build.
+The xxfclib-only build creates plaintext PEA, FreeArc and numbered split
+volumes; Windows builds can also create the XFU FreeArc self-extracting form.
+Brotli, ZPAQ, BALZ and BCM remain readable where reported. QUAD, LPAQ, PAQ,
+UPX and explicit external-engine reads report `read=no`. 7-Zip SFX reading
+remains partial through the native 7z path. Detection alone is not full-format
+support.
+
+```sh
+xfu a library.ar alpha.txt beta.txt
+xfu a disk.iso alpha.txt beta.txt
+xfu a records.warc.gz alpha.txt beta.txt
+xfu a backup.bin alpha.txt --format=pax --filter=zstd
+xfu a legacy.cpio alpha.txt --format=pwb
+xfu a archive.zip alpha.txt --compression=bzip2
+xfu t backup.bin --reader native --verbose
+xfu a comics.cbz page01.png page02.png
+xfu a archive.pea alpha.txt beta.txt
+xfu a archive.arc alpha.txt beta.txt --compression=store
+xfu a payload.001 alpha.txt --volume-size=10M
+xfu a archive.exe alpha.txt beta.txt --format=freearc_sfx
+```
+
+The archive readers and writers run in process through the xxfclib engine
+component. DEFLATE, CRC and LZMA support used by the PEA and FreeArc writers
+also comes from xxfclib. CMake performs no package or network lookup for codec
+or archive libraries.
+
+GARbro selectors and automatic GARbro fallback are unavailable in the
+xxfclib-only build. Native game and resource readers remain selectable.
+
+The GUI and TUI have an **Unpack** combobox populated with unpack handles
+(`XX_HANDLE_TYPE_*`), independently of physical `XX_FILE_TYPE_*` identification.
+A `sample.tar.gz` offers `GZ` and `TAR_GZ`, with `TAR_GZ` selected automatically.
+Selecting `GZ` shows its TAR payload as one member; selecting `TAR_GZ` shows
+its files and folders. Listing, extraction, and testing use the selected handle.
+A PE image containing a ZIP archive can offer `PE_ZIPSFX`. Files with no
+supported unpack method show **No unpacker** and disable archive actions.
+The number of offered handles is not limited by the file-type hierarchy length.
+
+Nested archives retain actionable outer layers, so an envelope or outer stream
+can be selected separately from an archive inside it. Opening a different file
+redetects its handles and selects the preferred interpretation again. The CLI
+accepts the same selection through `--handle GZ`, `--handle TAR_GZ`, or another
+name/ID from the compiled handle catalog; `--handle auto` restores detection.
+An explicit handle must match the file and never silently switches methods.
+
+`xx_format_get_unpack_handle_types_device(device, deep)` checks magic rules and
+native fixed anchors first, including all applicable executable SFX/installer
+readers. If no unpack handles are found it validates extension hints. With
+`deep=true`, it then tries structural readers if the earlier stages still
+found none. Readers that require an explicit raw geometry/import profile are
+not automatically guessed from arbitrary data.
 
 Compatibility includes single-member LZIP version 0 streams, older PYZ tables
 with little-endian offsets or dictionary entries, LOFI `gzip`/`gzip-6`/`gzip-9`
@@ -103,7 +177,7 @@ relative DOS paths in Corelltec and POVLAB members. Older Makeself wrappers,
 signed GPInstall carriers, InstallUs PE payloads, and FlashJester 1.01 retain
 their payload size and checksum checks. On Windows, long output paths use
 absolute extended paths, including atomic staging and replacement; directory
-creation continues to reject reparse points in every ancestor.
+creation continues to reject reparse points below the output folder.
 VMS SaveSet readers accept volume and FID metadata records, documented
 header-only reserved files, and NOBACKUP omissions. Missing ordinary file bodies
 and partial bodies still report failure. HFE Amiga MFM tracks are decoded into
@@ -149,7 +223,8 @@ xfu t archive.zip -pmy-password
 `xfu --formats` (or `xfu i`) lists every file type in xxfclib's format catalog.
 A compact grouped catalog is in [docs/CURRENT.md](docs/CURRENT.md).
 The catalog includes new archive, disk, filesystem and partition readers.
-Extraction capabilities depend on required profiles and available helpers.
+Extraction depends on the selected native reader and its documented limits;
+helper-backed handlers are unavailable in this build.
 Terminal output uses colors automatically; `--color=always` or `--color=never`
 overrides this, and `NO_COLOR` disables automatic colors. Redirected output is
 plain text by default. The GUI's **Help → Supported file types...** menu opens
@@ -163,6 +238,19 @@ Extraction, including selected members, runs on a worker thread. The GUI and
 TUI use xxwidgets' modal process dialog only while work remains unfinished
 after one second. Fast jobs finish without opening a progress window. Its five
 bars display busy xxfclib records, including member counts and decoder progress.
+A compressed stream that is being decoded shows how much of it has been read
+(`Reading archive`), and a 7-Zip folder how much of it has been decoded
+(`Decoding solid block`: it is decoded whole at its first file); while the
+member count cannot move (one member, a compressed TAR decoded before its
+walk, or a count that has not moved for half a second), the main window's
+status line shows that percentage, for example
+`Testing: 0/1 | Reading archive 45% | big.txt`, and `t` counts a solid
+folder's share of the members as it is decoded.
+Each pass over the stream (a probe for an archive inside it, a reader that
+validates it, then one that decodes it) starts it again, so a later pass is
+numbered: `Reading archive, pass 2 0%`, and so are the figures of the
+decoders that pass runs (`Unpacking Deflate, pass 2`), in the dialog too. The
+main bar counts members, so it never moves back.
 The worker publishes snapshots under a mutex; the UI never reads its mutable
 monitor directly. Cancel/Escape/close requests stop inside the decoder, and the
 dialog waits for worker completion before restoring the main window. Completed
@@ -170,18 +258,14 @@ files are kept on cancellation.
 
 ## Source dependencies
 
-After cloning the repository, initialize its submodules from the project root:
-
-```sh
-git submodule update --init --recursive
-```
-
-This populates `dep/xxfclib`, `dep/xxwidgets`, and `dep/cdisasm`. The current
-build uses `xxwidgets` but does not use `cdisasm`. The format and settings
-source lists live in this project's `cmake/` directory, while CMake uses the
-initialized `dep/xxfclib` and `dep/xxwidgets` by default. Set
-`XFILEUNPACKER_XXFCLIB_DIR` or `XFILEUNPACKER_XXWIDGETS_DIR` to another
-compatible source directory if needed.
+The build expects compatible xxfclib and xxwidgets source trees to exist
+locally. CMake uses `dep/xxfclib` and `dep/xxwidgets` by default; set
+`XFILEUNPACKER_XXFCLIB_DIR` and `XFILEUNPACKER_XXWIDGETS_DIR` when the prepared
+trees live elsewhere. Codec and archive implementation code is compiled from
+that xxfclib tree through `cmake/xxfclib_xfileunpacker.cmake`; the
+CXFileUnpacker tree supplies only frontends, shell integration, packaging and
+tests. Configuration does not use `FetchContent`, download codec sources, or
+search for system ZLIB, LibLZMA, Brotli, ZPAQ, UPX or related codec packages.
 
 ## Build on Windows
 
@@ -298,6 +382,13 @@ xfu p <archive>               Retrieve verified embedded passwords
 xfu a <archive> <file>...     Add files to a new archive
 ```
 
+Add `--json` (`-j`) or `--xml` (`-x`) after an archive or information
+command to write one machine-readable document. The formats are mutually
+exclusive and may be selected only once. Structured output covers archive
+creation, listing, testing, extraction and password retrieval, plus
+`--version`, `--formats`, `--capabilities` and `--raw-profiles`. Diagnostics,
+member metadata and the final process status stay inside that document.
+
 Command letters are case-insensitive. The default output directory is the
 current directory. Quote paths with spaces, including the entire `-o`
 argument:
@@ -318,32 +409,112 @@ The `t` command verifies members in memory without creating extracted files.
 By default it prints only aggregate percentage progress. Add `--verbose` or
 `-v` after the archive path to show each member's `OK` or `FAILED` result
 instead. Errors go to stderr, and a failed test returns a nonzero exit code.
+An archive inside a compressed stream or an encoded envelope (a `.cpio.gz`, a
+`.tar.lz4`, an ISO in `.xz`) is decoded into that memory first. When it is
+larger than the 256 MiB Test may use, `t` says so (`the CPIO inside is larger
+than the 256 MiB that Test keeps in memory; it was not tested`), tests only the
+stream around it, and returns `1`. `l` and `x` decode up to 4 GiB of such a
+layer; a larger one is noted the same way and read as the stream's one file.
+A 7-Zip folder is checked as it is decoded, so its members pass `t` whatever
+their size, unless a filter (BCJ, BCJ2, Delta and the like) or its encryption
+(7zAES) needs its decoded intermediate stream in that memory; such a member
+fails with `(too large to test in memory)`.
+A compressed TAR (`.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tar.lzma`, or a
+`.tar.zst` or `.tar.lz4` that records its size) is decoded once, into memory
+and beyond 256 MiB into a temporary file (in `TMPDIR` when it is set), so `l`
+and `x` read one of any size the disk takes; where the disk fills or a file
+size limit (`ulimit -f`) stops the file, one of at most 1 GiB is decoded again
+into memory, and a larger one says so (`no space for a temporary copy of the
+TAR inside; it was not opened`, exit code `2`). Past 1 GiB the TAR may be at
+most 4096 times the size of its compressed stream: more is what a
+decompression bomb holds (a few hundred KB of bzip2 can decode to 50 GiB of
+zeros), and decoding stops there (`the TAR inside is larger than 1 GiB and
+more than 4096 times the size of its compressed stream, as a decompression
+bomb is; it was not opened`, exit code `2`). `t` keeps it in memory and says
+when it is larger than 1 GiB (`the TAR inside is larger than the 1 GiB that
+Test keeps in memory; it was not tested`, exit code `2`). A cut one, such as
+a download that stopped,
+is read as far as it goes, as GNU tar does: `<path>: incomplete archive;
+showing recovered members`, the members before the cut are listed, tested
+and extracted, the one the cut goes through fails (`-- FAILED (cut)`, a
+sparse one too) and nothing is written for it (nor for a hard link to it), so
+a file already at its path stays as it was, and the exit code is `1`; a
+member before it that fails for a reason of its own (a FIFO, a device) gives
+that reason, as in a whole archive. A cut `.tar.zst` or `.tar.lz4` is read so
+whether or not it records its size (`tar --zstd` and `tar -I lz4` do not),
+and so is a whole stream whose TAR is cut: one cut where a gzip member, an xz
+or bzip2 stream, or a zstd or LZ4 frame ends, or a TAR cut before it was
+compressed. A stream of one zstd or LZ4 frame that does not record its size
+is not: its TAR is read inside it as a nested layer, which, cut, is read as
+the stream's one file. What the stream holds after its last check before the
+cut has no check to vouch for it, and is read without one, as GNU tar reads
+it: in a `.tar.lzma` (which has no check at all) that is every
+member; in a `.tar.gz` those after the last whole gzip member (each has a
+CRC), in a `.tar.zst` or `.tar.lz4` those after the last frame (or LZ4 block)
+whose checksum was verified, in a `.tar.xz` or `.tar.bz2` those after the
+last whole Block. When `t` or `x` reads such a member, the archive's line
+says so instead: `<path>: incomplete archive; members before the cut were
+read without a checksum`. A stream that fails a check, or that its decoder
+finds invalid, before the cut is damaged, not cut, and is not read.
 There is no `e` command because the library's extraction API preserves stored
 paths.
+`x` writes below the output folder, which, like the folders above it, may be a
+symbolic link (as `/tmp` is on macOS) or, on Windows, a junction. A link that
+extraction meets below it is refused. A file already at a member's path is
+replaced by the member, whatever the archive's format (on Linux and macOS a
+read-only one too, as `tar` replaces it), and the member's line says so
+(`name -- replaced an existing file`); a link or a file with other hard
+links there is replaced too, never written through, but not the archive
+being read (`name -- FAILED (it would replace the archive)`), whether the
+name separates its folders with `/` or `\`. The GUI and TUI
+extract the same way, and their log shows the same lines. A member path or
+name longer than the system takes fails, leaving
+no folders made for it. A member that fails says why when that is known, for
+example `name -- FAILED (a folder is in the way)`, `(permission
+denied)`, `(path too long)`, `(a link is in the way)`, `(unsafe member path)`,
+`(no room for a temporary copy)` (a 7-Zip folder is decoded into one first)
+or `(encrypted; a password is needed)`. A member path is unsafe when it is
+absolute or has a `..` component or a control character. A TAR or CPIO
+member that holds data is a file even when its name ends in `\`: it fails
+(`name -- FAILED (the name ends in a separator)`) and no folder is made for
+it (a trailing `/` makes a folder, as old `tar` writers stored one). `:` is
+an ordinary character of a name on Linux and macOS (`9:00-notes.txt`, `a:b`),
+where such
+a member is extracted as it is named; on Windows, where `:` names a drive or
+a file's stream, it makes the path unsafe (Base64 and uuencoded envelopes
+name their member after the part of the stored name that follows its last
+`/`, `\` or `:`).
 
 The `a` command creates an archive and replaces an existing archive of a
 supported format. Writable formats are `.7z`, `.zip`, `.tar`, `.gz`, `.bz2`,
 `.xz`, `.wim`, `.tar.gz` / `.tgz`, `.tar.bz2` / `.tbz2`, `.tar.xz` / `.txz`,
 `.tar.zst`, `.tar.lz4`, and `.cpio`. Raw GZIP, BZIP2 and XZ streams require one
-input file. `-p` also protects newly created 7z/ZIP archives.
-WIM creation defaults to XPRESS compression. Select `--compression=stored`,
-`--compression=xpress`, `--compression=lzx` or `--compression=lzms`; optional
-`--compression-level=0..100` uses the compressor default at zero.
-XPRESS/LZX produce WIM 1.13 and LZMS produces non-solid WIM 0.14. The separate
-wimlib compression runtime
-uses RAM chunks without temporary files. Stored creation and native reading
-work without that runtime; unavailable compression fails before an existing
-destination is truncated. These compression switches are console options.
-The Windows x64 7-Zip engine, when supplied separately,
-provides all 60 readers in 7-Zip 26.03. Use `--reader sevenzip` for automatic
-engine selection, including embedded SFX archives, or select a named handler such
-as `--reader sevenzip_apfs`. `--reader sevenzip_pe`, `sevenzip_elf` and
-`sevenzip_macho` expose executable sections. Native readers stay available.
-Automatic fallback stays with the detected or requested container and requires
-the archive at its start. Failed installer validation remains a failure; fallback
-does not scan for an inner archive or expose the executable carrier's sections.
-The seven upstream writable formats are all enabled;
-upstream read-only disk/filesystem and archive handlers remain read-only.
+input file. `-p` also protects newly created 7z/ZIP archives; an empty password
+(`-p` alone, or an empty `--password-env`) means none, for every format.
+A folder is added with everything it holds, an input named twice is stored
+once, and the new archive replaces the destination only when it is complete,
+so a refused input, a failure (a full disk too) or a Cancel leaves an existing
+archive as it was (see `docs/ARCHIVE_FORMATS.md`). A symbolic link named as an
+input is stored as the file or folder it names; a link inside an added folder,
+or a file replaced after the folder was read, is refused. The new
+archive keeps the permissions of the one it replaces, and a destination that is
+a symbolic link is followed, so the link stays a link (Windows refuses it).
+Other hard links to the replaced archive keep the previous one. A new archive
+never replaces a file that appeared at its name meanwhile. Each member keeps
+its permissions and modification time where the format holds them (TAR also
+its owner and group); a time the format cannot hold (before 1970 in ustar, for
+example) is stored as the nearest one it can, with a warning line, and
+`--format=pax` stores any time. A destination
+that is a folder, or a write-protected archive, is refused before anything is
+written. In a folder that takes no new file, an existing writable archive is
+written over in place: the complete archive is built aside first, but a
+failure during that copy (a full disk, for example) leaves the archive there
+damaged, and the run says so. A device or FIFO is written directly; when that
+is standard output itself (`/dev/stdout`), the log goes to standard error.
+WIM creation defaults to stored data. The xxfclib-only build rejects XPRESS,
+LZX and LZMS because those methods require a separate compressor process.
+External 7-Zip, media, GARbro, UPX, UHARC, filesystem and codec helper
+processes are disabled; native xxfclib readers and writers stay available.
 
 xxfclib determines which formats can be read and the limitations of each
 reader.
@@ -418,7 +589,9 @@ The TUI shows the selected record's properties when Advanced is checked.
 Folder views show immediate children. For example, a DOCX file opens at the
 ZIP root; enter `word/` to see its contents, then `_rels/` or `theme/` for their
 files. Folders inferred from member paths are navigation rows rather than
-stored archive records, so their extra metadata remains blank.
+stored archive records, so their extra metadata remains blank. A member whose
+path has a `..` component is left out of the folder view, with one log line
+naming it; extraction refuses such members.
 
 Use Ctrl-click to select individual rows, Shift-click for a range, and Ctrl+A
 to select all rows in the current folder. Sorting and toggling Advanced retain
@@ -454,7 +627,23 @@ extracted remain.
 Operation messages appear in the log. Invalid UTF-8 bytes in archive names
 are displayed as visible `[NN]` escapes in member names and `\xNN` escapes in
 log messages, without changing the names used by
-readers during extraction.
+readers during extraction. Control characters and the invisible characters
+that can show a name reversed, split it or hide a difference are escaped the
+same way, one escape per byte: every Unicode format character (Cf, such as
+U+00AD, U+061C, U+200B, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069, U+FEFF
+and the tags U+E0001 and U+E0020-U+E007F, those of an emoji flag that starts
+with U+1F3F4 too), U+2028, U+2029, and the other code
+points that draw nothing (U+034F, the Hangul fillers U+115F, U+1160, U+3164
+and U+FFA0, U+17B4, U+17B5 and the unassigned default-ignorable ones).
+A variation selector (U+FE00-U+FE0F, U+E0100-U+E01EF, the Mongolian U+180B-U+180D
+and U+180F) is escaped too unless it follows a base it applies to: U+FE0E or
+U+FE0F after an emoji or a symbol with an emoji form (U+00A9, U+00AE, arrows,
+U+2600-U+27BF, U+1F000-U+1FAFF, ...) or between a keycap's 0-9, # or * and
+U+20E3, U+FE00-U+FE02 or U+E0100-U+E01EF after a CJK ideograph, and the
+Mongolian ones after a Mongolian letter. U+200C and U+200D stay as they are;
+`xfu` prints the others as `\xNN`. In the terminal UI's own fields (a typed or
+program-set path, the status line) the same characters, and control
+characters, take a cell each as U+FFFD instead.
 
 You can launch the GUI or TUI with an archive path to browse, or pass the same
 `x`, `l`, or `t` command and arguments accepted by the console version.
@@ -485,11 +674,11 @@ The checked-in assets require no image tools to build. To regenerate all sizes
 from their shared vector geometry, run `python packaging/generate_icons.py`
 with Pillow installed.
 
-`src/core.c` implements the shared operations and callbacks for messages,
-members, progress, and cancellation. `src/cli.c` implements the command-line
-interface. `src/ui.c` is shared by the GUI and TUI, whose entry points are in
-`src/gui.c` and `src/tui.c`. Operations run on a worker thread; all xxwidgets
-calls stay on the UI thread.
+`xxfclib/src/xfileunpacker/core.c` implements the shared operations and
+callbacks for messages, members, progress, and cancellation. `src/cli.c`
+implements the command-line interface. `src/ui.c` is shared by the GUI and
+TUI, whose entry points are in `src/gui.c` and `src/tui.c`. Operations run on a
+worker thread; all xxwidgets calls stay on the UI thread.
 
 ArchiveBrowser owns its metadata, infers folders from member paths, tracks
 the current directory, sorts columns, and maps selections to original members.

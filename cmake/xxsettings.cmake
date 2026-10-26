@@ -10,6 +10,9 @@ set(XXSETTINGS_SOURCES
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/global/xx_global.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/global/platforms/xx_global_cpu.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/xx_rt.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/sort/xx_sort.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/sort/platforms/xx_sort_sse2.c
+    ${XFILEUNPACKER_XXFCLIB_DIR}/src/sort/platforms/xx_sort_avx2.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/xx_rt_fp.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/xx_rt_math.c
     ${XFILEUNPACKER_XXFCLIB_DIR}/src/io/xx_io_memory_only.c
@@ -24,6 +27,7 @@ if(WIN32)
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/settings/platforms/xx_settings_windows.c
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/global/platforms/xx_global_windows.c
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/platforms/xx_rt_windows.c
+        ${XFILEUNPACKER_XXFCLIB_DIR}/src/sort/platforms/xx_sort_windows.c
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/memory/platforms/xx_memory_windows.c
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/strings/platforms/xx_string_windows.c
     )
@@ -33,6 +37,7 @@ else()
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/settings/platforms/xx_settings_file_posix.c
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/global/platforms/xx_global_posix.c
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/rt/platforms/xx_rt_posix.c
+        ${XFILEUNPACKER_XXFCLIB_DIR}/src/sort/platforms/xx_sort_posix.c
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/memory/platforms/xx_memory_posix.c
         ${XFILEUNPACKER_XXFCLIB_DIR}/src/strings/platforms/xx_string_posix.c
     )
@@ -45,3 +50,7 @@ else()
         list(APPEND XXSETTINGS_SOURCES ${XFILEUNPACKER_XXFCLIB_DIR}/src/settings/platforms/xx_settings_posix.c)
     endif()
 endif()
+
+# SIMD flags apply only to the runtime-dispatched sorting translation units.
+include("${XFILEUNPACKER_XXFCLIB_DIR}/cmake/xxfclib_sort_simd.cmake")
+xxfclib_configure_sort_simd_sources("${XFILEUNPACKER_XXFCLIB_DIR}")
