@@ -978,6 +978,64 @@ static int check_memory_refusals(void) {
     return 0;
 }
 
+static int check_numbered_lha(const char *root) {
+    unsigned char bytes[160] = {0}, *h = bytes + 64;
+    char path[2048], second[2048], output[2048], result[2100];
+    unsigned i, sum = 0, c = 0;
+    capture state = {0};
+    xfu_request request;
+    memcpy(bytes, "MZ", 2); bytes[2] = 64; bytes[4] = 1; bytes[8] = 2;
+    h[0] = 27; memcpy(h + 2, "-lh0-", 5); h[7] = h[11] = 3;
+    h[19] = 32; h[21] = 5; memcpy(h + 22, "a.txt", 5);
+    for (i = 0; i < 3; ++i) {
+        unsigned bit; c ^= (unsigned char)"xyz"[i];
+        for (bit = 0; bit < 8; ++bit) c = (c >> 1) ^ ((c & 1) ? 0xa001U : 0);
+    }
+    h[27] = (unsigned char)c; h[28] = (unsigned char)(c >> 8);
+    for (i = 2; i < 29; ++i) sum += h[i];
+    h[1] = (unsigned char)sum;
+    memcpy(h + 29, "xyz", 3);
+    CHECK(snprintf(path, sizeof(path), "%s/numbered-lha.001", root) > 0);
+    CHECK(snprintf(second, sizeof(second), "%s/numbered-lha.002", root) > 0);
+    CHECK(snprintf(output, sizeof(output), "%s/numbered-lha-output", root) > 0);
+    if (xx_io_file_exists_a(second)) CHECK(xx_io_file_remove_a(second));
+    CHECK(write_bytes(path, bytes, 97));
+    request = request_for(path, XFU_COMMAND_LIST, &state);
+    CHECK(xfu_run(&request) == 0 && state.entries == 1 && !strcmp(state.name, "a.txt"));
+    state = (capture){0}; request = request_for(path, XFU_COMMAND_TEST, &state);
+    CHECK(xfu_run(&request) == 0 && state.tests == 1 && state.test_success);
+    state = (capture){0}; request = request_for(path, XFU_COMMAND_EXTRACT, &state);
+    request.output_dir = output; CHECK(xfu_run(&request) == 0);
+    CHECK(snprintf(result, sizeof(result), "%s/a.txt", output) > 0);
+    CHECK(file_matches(result, "xyz") && xx_io_file_remove_a(result));
+    /* An explicit split interpretation still exposes the combined payload. */
+    state = (capture){0}; request = request_for(path, XFU_COMMAND_LIST, &state);
+    request.reader_name = "split";
+    CHECK(xfu_run(&request) == 0 && !strcmp(state.name, "numbered-lha"));
+    state = (capture){0}; request = request_for(path, XFU_COMMAND_LIST, &state);
+    request.file_type = XX_FILE_TYPE_NUMBERED_SPLIT;
+    CHECK(xfu_run(&request) == 0 && !strcmp(state.name, "numbered-lha"));
+    /* A bad payload CRC must fail instead of silently selecting raw split. */
+    bytes[93] ^= 1; CHECK(write_bytes(path, bytes, 97));
+    state = (capture){0}; request = request_for(path, XFU_COMMAND_TEST, &state);
+    CHECK(xfu_run(&request) == 1 && state.tests == 1 && !state.test_success);
+    bytes[93] ^= 1;
+    /* A valid first member followed by a cut member remains a split series. */
+    memcpy(bytes + 96, h, 29); bytes[103] = 100;
+    sum = 0; for (i = 98; i < 125; ++i) sum += bytes[i]; bytes[97] = (unsigned char)sum;
+    CHECK(write_bytes(path, bytes, 130) && write_file(second, "end"));
+    state = (capture){0}; request = request_for(path, XFU_COMMAND_LIST, &state);
+    CHECK(xfu_run(&request) == 0 && !strcmp(state.name, "numbered-lha"));
+    CHECK(xx_io_file_remove_a(second));
+    CHECK(write_file(path, "ordinary split payload"));
+    state = (capture){0}; request = request_for(path, XFU_COMMAND_TEST, &state);
+    CHECK(xfu_run(&request) == 0 && state.tests == 1 && state.test_success);
+    state = (capture){0}; state.cancel = true;
+    request = request_for(path, XFU_COMMAND_LIST, &state); CHECK(xfu_run(&request) == 1);
+    CHECK(xx_io_file_remove_a(path));
+    return 0;
+}
+
 int main(int argc, char **argv) {
     static const char content[] = "a raw input with no archive signature\n";
     static const unsigned char cpio_gz[] = {
@@ -1016,6 +1074,7 @@ int main(int argc, char **argv) {
     unsigned char broken[sizeof(cpio_gz)];
     const size_t first[] = {0}, absent[] = {1};
     CHECK(argc == 2);
+    CHECK(check_numbered_lha(argv[1]) == 0);
     CHECK(xfu_native_reader_resolve("native", &name, &raw) && !name && !raw);
     CHECK(xfu_native_reader_resolve("native:pax", &name, &raw) && !strcmp(name, "tar") && !raw);
     CHECK(xfu_native_reader_resolve("native:cpio_crc", &name, &raw) && !strcmp(name, "cpio") && !raw);
