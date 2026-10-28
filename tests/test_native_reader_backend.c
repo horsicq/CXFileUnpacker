@@ -1074,6 +1074,7 @@ int main(int argc, char **argv) {
     unsigned char broken[sizeof(cpio_gz)];
     const size_t first[] = {0}, absent[] = {1};
     CHECK(argc == 2);
+    CHECK(xx_io_create_dirs_a(argv[1], true));
     CHECK(check_numbered_lha(argv[1]) == 0);
     CHECK(xfu_native_reader_resolve("native", &name, &raw) && !name && !raw);
     CHECK(xfu_native_reader_resolve("native:pax", &name, &raw) && !strcmp(name, "tar") && !raw);
@@ -1098,7 +1099,6 @@ int main(int argc, char **argv) {
 #endif
     CHECK(!xfu_native_member_name_safe("folder/../escape", false));
     CHECK(!xfu_native_member_name_safe("folder\\..\\escape", false));
-    CHECK(xx_io_create_dirs_a(argv[1], true));
     CHECK(snprintf(source, sizeof(source), "%s/input.txt", argv[1]) > 0);
     CHECK(snprintf(output, sizeof(output), "%s/output", argv[1]) > 0);
     CHECK(snprintf(extracted, sizeof(extracted), "%s/input.txt", output) > 0);
