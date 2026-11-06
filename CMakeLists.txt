@@ -20,6 +20,7 @@ set(XFILEUNPACKER_XXFCLIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dep/xxfclib" CACHE PA
 set(XFILEUNPACKER_XXWIDGETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dep/xxwidgets" CACHE PATH "xxwidgets source directory")
 option(XFILEUNPACKER_BUILD_GUI "Build the native desktop frontend" ON)
 option(XFILEUNPACKER_BUILD_TUI "Build the terminal frontend" ON)
+option(XFILEUNPACKER_BUILD_FREEARC_SFX "Embed the source-built Windows XFU FreeArc SFX stub" OFF)
 
 if(NOT EXISTS "${XFILEUNPACKER_XXFCLIB_DIR}/src/xfileunpacker/xxfc_readers.c")
     message(FATAL_ERROR "XFILEUNPACKER_XXFCLIB_DIR must contain the xxfclib unpacker engine")
