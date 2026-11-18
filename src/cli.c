@@ -582,20 +582,22 @@ static int handle_name_equal(const char *left, const char *right) {
     }
 }
 
-static int parse_unpack_handle(const char *name, xx_handle_type_t *handle) {
+static int parse_unpack_handle(const char *name, xx_unpack_handle_t *handle) {
     xx_list_t *supported;
     size_t i;
     unsigned long numeric = 0;
     int is_numeric = 0, found = 0;
     char *end;
     if (!name || !*name) return 0;
-    if (strlen(name) >= 15) {
-        char prefix[16];
-        memcpy(prefix, name, 15); prefix[15] = 0;
-        if (handle_name_equal(prefix, "XX_HANDLE_TYPE_")) name += 15;
+    if (strlen(name) >= 13) {
+        char prefix[14];
+        memcpy(prefix, name, 13); prefix[13] = 0;
+        if (handle_name_equal(prefix, "XX_FILE_TYPE_")) name += 13;
     }
     if (handle_name_equal(name, "auto") || handle_name_equal(name, "automatic")) {
-        *handle = XX_HANDLE_TYPE_UNKNOWN; return 1;
+        handle->type = XX_FILE_TYPE_UNKNOWN;
+        handle->carrier = XX_UNPACK_CARRIER_NONE;
+        return 1;
     }
     if (handle_name_equal(name, "gzip")) name = "gz";
     else if (handle_name_equal(name, "bzip2")) name = "bz2";
@@ -605,16 +607,20 @@ static int parse_unpack_handle(const char *name, xx_handle_type_t *handle) {
         /* 7ZIP is a name, not a malformed numeric ID. */
         if (!*end) {
             if (errno || numeric > UINT32_MAX) return 0;
-            if (!numeric) { *handle = XX_HANDLE_TYPE_UNKNOWN; return 1; }
+            if (!numeric) {
+                handle->type = XX_FILE_TYPE_UNKNOWN;
+                handle->carrier = XX_UNPACK_CARRIER_NONE;
+                return 1;
+            }
             is_numeric = 1;
         }
     }
     supported = xx_format_get_supported_unpack_handle_types();
     if (!supported) return 0;
     for (i = 0; i < xx_list_count(supported); ++i) {
-        xx_handle_type_t candidate = *(const xx_handle_type_t *)xx_list_at(supported, i);
-        if ((is_numeric && numeric == (unsigned long)candidate) ||
-            (!is_numeric && handle_name_equal(name, xx_format_handle_type_to_string(candidate)))) {
+        xx_unpack_handle_t candidate = *(const xx_unpack_handle_t *)xx_list_at(supported, i);
+        if ((is_numeric && candidate.carrier == XX_UNPACK_CARRIER_NONE && numeric == (unsigned long)candidate.type) ||
+            (!is_numeric && handle_name_equal(name, xx_format_unpack_handle_to_string(candidate)))) {
             *handle = candidate; found = 1; break;
         }
     }
@@ -642,6 +648,7 @@ static void usage(FILE *out, const char *program) {
             "  --json, -j  Write one JSON document to standard output\n"
             "  --xml, -x   Write one XML document to standard output\n"
             "  -o<dir>   Output directory for x (default: the current directory)\n"
+            "  --force   For x: keep the readable part of a member whose stream is damaged\n"
             "  --advanced, -slt  Show all available metadata for each listed file\n"
             "  --verbose, -v  Show each member's OK/FAILED result for t\n"
             "  --handle <name|id>  Select an unpack handle, e.g. GZ, TAR_GZ or PE_ZIPSFX\n"
@@ -1188,7 +1195,7 @@ static int run_cli_arguments(int argc, char **argv, output_format initial_output
         } else if (!literal_files && (!strcmp(argv[i], "--handle") || !strncmp(argv[i], "--handle=", 9))) {
             const char *name = argv[i][8] == '=' ? argv[i] + 9 : (++i < argc ? argv[i] : NULL);
             if (request.command == XFU_COMMAND_ADD || handle_specified || request.reader_name ||
-                !parse_unpack_handle(name, &request.handle_type)) {
+                !parse_unpack_handle(name, &request.handle)) {
                 fprintf(stderr, "--handle: select one supported unpack handle for l, t, p or x; cannot combine with --reader\n");
                 result = 2; goto cleanup;
             }
@@ -1300,6 +1307,9 @@ static int run_cli_arguments(int argc, char **argv, output_format initial_output
                 goto cleanup;
             }
             advanced_listing = true;
+        } else if (request.command == XFU_COMMAND_EXTRACT && !strcmp(argv[i], "--force")) {
+            /* Salvage; repeating it is harmless. See xfu_request.force. */
+            request.force = true;
         } else if (request.command == XFU_COMMAND_EXTRACT &&
                    strncmp(argv[i], "-o", 2) == 0) {
             if (!argv[i][2]) {

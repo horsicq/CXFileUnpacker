@@ -50,20 +50,34 @@ static void close_memory(input *in)
     memset(in, 0, sizeof(*in));
 }
 
-static int has(const xx_list_t *types, xx_handle_type_t type)
+static const xx_unpack_handle_t HANDLE_UNKNOWN = {XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
+static const xx_unpack_handle_t HANDLE_GZ = {XX_FILE_TYPE_GZ, XX_UNPACK_CARRIER_NONE};
+static const xx_unpack_handle_t HANDLE_TAR_GZ = {XX_FILE_TYPE_TAR_GZ, XX_UNPACK_CARRIER_NONE};
+static const xx_unpack_handle_t HANDLE_ZIP = {XX_FILE_TYPE_ZIP, XX_UNPACK_CARRIER_NONE};
+static const xx_unpack_handle_t HANDLE_TAR = {XX_FILE_TYPE_TAR, XX_UNPACK_CARRIER_NONE};
+static const xx_unpack_handle_t HANDLE_PNG = {XX_FILE_TYPE_PNG, XX_UNPACK_CARRIER_NONE};
+static const xx_unpack_handle_t HANDLE_PE_ZIPSFX = {XX_FILE_TYPE_SFX_ZIPCENTRAL, XX_UNPACK_CARRIER_PE};
+static const xx_unpack_handle_t HANDLE_MSDOS_ZIPSFX = {XX_FILE_TYPE_SFX_ZIPCENTRAL, XX_UNPACK_CARRIER_MSDOS};
+static const xx_unpack_handle_t HANDLE_COM_ZIPSFX = {XX_FILE_TYPE_SFX_ZIPCENTRAL, XX_UNPACK_CARRIER_COM};
+static const xx_unpack_handle_t HANDLE_NUMBERED_SPLIT = {XX_FILE_TYPE_NUMBERED_SPLIT, XX_UNPACK_CARRIER_NONE};
+static const xx_unpack_handle_t HANDLE_EXECUTABLE_OVERLAY = {XX_FILE_TYPE_EXECUTABLE_OVERLAY, XX_UNPACK_CARRIER_NONE};
+
+static int has(const xx_list_t *types, xx_unpack_handle_t handle)
 {
-    return xx_list_contains(types, &type, NULL);
+    return xx_list_contains(types, &handle, NULL);
 }
 
 static int valid_handle_list(const xx_list_t *types)
 {
     size_t i, j;
-    if (!types || types->elem_size != sizeof(xx_handle_type_t)) return 0;
+    if (!types || types->elem_size != sizeof(xx_unpack_handle_t)) return 0;
     for (i = 0; i < xx_list_count(types); ++i) {
-        xx_handle_type_t type = *(const xx_handle_type_t *)xx_list_at(types, i);
-        if (type == XX_HANDLE_TYPE_UNKNOWN || xx_format_handle_type_file_type(type) == XX_FILE_TYPE_UNKNOWN) return 0;
-        for (j = 0; j < i; ++j)
-            if (*(const xx_handle_type_t *)xx_list_at(types, j) == type) return 0;
+        xx_unpack_handle_t handle = *(const xx_unpack_handle_t *)xx_list_at(types, i);
+        if (handle.type == XX_FILE_TYPE_UNKNOWN || strcmp(xx_format_unpack_handle_to_string(handle), "UNKNOWN") == 0) return 0;
+        for (j = 0; j < i; ++j) {
+            xx_unpack_handle_t prev = *(const xx_unpack_handle_t *)xx_list_at(types, j);
+            if (prev.type == handle.type && prev.carrier == handle.carrier) return 0;
+        }
     }
     return 1;
 }
@@ -71,25 +85,28 @@ static int valid_handle_list(const xx_list_t *types)
 static int check_catalog_identities(void)
 {
     static const struct {
-        xx_handle_type_t handle;
         xx_file_type_t file_type;
+        xx_unpack_carrier_t carrier;
         const char *name;
     } identities[] = {
-#define XX_UNPACK_HANDLE(name, value, type, carrier) {XX_HANDLE_TYPE_##name, XX_FILE_TYPE_##type, #name},
+#define XX_UNPACK_HANDLE(name, type, carrier) {XX_FILE_TYPE_##type, (xx_unpack_carrier_t)(carrier), #name},
 #include <xxfclib/formats/xx_format_unpack_handle_rows.inc>
 #undef XX_UNPACK_HANDLE
     };
     size_t i, j;
     for (i = 0; i < sizeof(identities) / sizeof(identities[0]); ++i) {
-        CHECK(xx_format_handle_type_file_type(identities[i].handle) == identities[i].file_type);
-        CHECK(strcmp(xx_format_handle_type_to_string(identities[i].handle), identities[i].name) == 0);
-        for (j = 0; j < i; ++j) CHECK(identities[j].handle != identities[i].handle);
+        xx_unpack_handle_t h = {identities[i].file_type, identities[i].carrier};
+        CHECK(strcmp(xx_format_unpack_handle_to_string(h), identities[i].name) == 0);
+        for (j = 0; j < i; ++j) {
+            CHECK(!(identities[j].file_type == identities[i].file_type && identities[j].carrier == identities[i].carrier));
+            CHECK(strcmp(identities[j].name, identities[i].name) != 0);
+        }
     }
     return 0;
 }
 
 static int check_detect(const char *root, const char *name, bool deep,
-                        xx_handle_type_t required, bool empty)
+                        xx_unpack_handle_t required, bool empty)
 {
     input in;
     xx_list_t *types;
@@ -101,7 +118,7 @@ static int check_detect(const char *root, const char *name, bool deep,
     CHECK(valid_handle_list(types));
     CHECK(xx_io_tell(in.device) == position);
     if (empty) CHECK(xx_list_count(types) == 0U);
-    if (required != XX_HANDLE_TYPE_UNKNOWN) CHECK(has(types, required));
+    if (required.type != XX_FILE_TYPE_UNKNOWN) CHECK(has(types, required));
     xx_list_destroy(types);
     close_memory(&in);
     return 0;
@@ -117,7 +134,7 @@ static int check_stream_and_suffix(const char *root)
     CHECK(xx_io_seek64(in.device, 9, SEEK_SET) == 0);
     types = xx_format_get_unpack_handle_types_device(in.device, false);
     CHECK(valid_handle_list(types));
-    CHECK(has(types, XX_HANDLE_TYPE_GZ) && has(types, XX_HANDLE_TYPE_TAR_GZ));
+    CHECK(has(types, HANDLE_GZ) && has(types, HANDLE_TAR_GZ));
     CHECK(xx_io_tell(in.device) == 9);
     xx_list_destroy(types);
     close_memory(&in);
@@ -127,8 +144,8 @@ static int check_stream_and_suffix(const char *root)
     CHECK(xx_io_seek64(named, 11, SEEK_SET) == 0);
     types = xx_format_get_unpack_handle_types_device(named, false);
     CHECK(valid_handle_list(types));
-    CHECK(has(types, XX_HANDLE_TYPE_GZ) && has(types, XX_HANDLE_TYPE_TAR_GZ));
-    CHECK(!has(types, XX_HANDLE_TYPE_ZIP));
+    CHECK(has(types, HANDLE_GZ) && has(types, HANDLE_TAR_GZ));
+    CHECK(!has(types, HANDLE_ZIP));
     CHECK(xx_io_tell(named) == 11);
     xx_list_destroy(types);
     CHECK(xx_io_close(named) == 0);
@@ -136,7 +153,7 @@ static int check_stream_and_suffix(const char *root)
 }
 
 static int check_native_reader(const char *root, const char *name,
-                               xx_file_type_t file_type, xx_handle_type_t handle)
+                               xx_file_type_t file_type, xx_unpack_handle_t handle)
 {
     input in;
     Abstractformat *reader;
@@ -145,8 +162,9 @@ static int check_native_reader(const char *root, const char *name,
     CHECK(xx_format_is_valid(reader, NULL));
     CHECK(xx_format_handle_base_info(reader, NULL));
     CHECK(reader->file_type == file_type);
-    CHECK(reader->handle_type == handle && reader->handle_type != XX_HANDLE_TYPE_UNKNOWN);
-    CHECK(xx_format_get_handle_type(reader) == handle);
+    CHECK(reader->handle_type == handle.type && reader->handle_carrier == handle.carrier && reader->handle_type != XX_FILE_TYPE_UNKNOWN);
+    CHECK(xx_format_get_handle_type(reader) == handle.type);
+    CHECK(xx_format_get_unpack_handle(reader).type == handle.type && xx_format_get_unpack_handle(reader).carrier == handle.carrier);
     xx_format_free_reader(reader);
     close_memory(&in);
     return 0;
@@ -166,12 +184,12 @@ static int check_prefixed_zip(const char *root)
     CHECK((named = xx_io_file_open(path, "rb")) != NULL);
     CHECK(xx_io_seek64(named, 5, SEEK_SET) == 0);
     types = xx_format_get_unpack_handle_types_device(named, false);
-    CHECK(valid_handle_list(types) && has(types, XX_HANDLE_TYPE_ZIP));
+    CHECK(valid_handle_list(types) && has(types, HANDLE_ZIP));
     CHECK(xx_io_tell(named) == 5);
     xx_list_destroy(types);
     CHECK(xx_io_close(named) == 0);
-    CHECK(check_detect(root, "prefixed.bin", false, XX_HANDLE_TYPE_UNKNOWN, true) == 0);
-    CHECK(check_detect(root, "prefixed.bin", true, XX_HANDLE_TYPE_ZIP, false) == 0);
+    CHECK(check_detect(root, "prefixed.bin", false, HANDLE_UNKNOWN, true) == 0);
+    CHECK(check_detect(root, "prefixed.bin", true, HANDLE_ZIP, false) == 0);
 
     CHECK(open_memory(&in, root, "prefixed.bin"));
     /* Physical identification stays strict. An unpack handle deliberately
@@ -179,10 +197,10 @@ static int check_prefixed_zip(const char *root)
     CHECK((reader = xx_format_create_reader(XX_FILE_TYPE_ZIP, in.device, 0)) != NULL);
     CHECK(!xx_format_is_valid(reader, NULL));
     xx_format_free_reader(reader);
-    CHECK((reader = xx_format_create_handle_reader(XX_HANDLE_TYPE_ZIP, in.device, 0)) != NULL);
+    CHECK((reader = xx_format_create_handle_reader(HANDLE_ZIP, in.device, 0)) != NULL);
     CHECK(xx_format_is_valid(reader, NULL));
     CHECK(xx_format_handle_base_info(reader, NULL));
-    CHECK(reader->handle_type == XX_HANDLE_TYPE_ZIP);
+    CHECK(reader->handle_type == XX_FILE_TYPE_ZIP && reader->handle_carrier == XX_UNPACK_CARRIER_NONE);
     CHECK((state = xx_format_create_archive_records_reading(reader, NULL, NULL)) != NULL);
     CHECK((record = xx_format_get_current_archive_record(reader, state)) != NULL);
     CHECK((xx_archive_record_get_original_name(record) &&
@@ -219,17 +237,21 @@ static int check_named_empty(const char *root, const char *name)
 /* Carrier variants share a native archive reader. A requested identity must
  * not survive parsing when its carrier differs from the actual input. */
 static int check_requested_carrier(const char *root, const char *name,
-                                    xx_handle_type_t requested, xx_handle_type_t actual)
+                                   xx_unpack_handle_t requested, xx_unpack_handle_t actual)
 {
     input in;
     Abstractformat *reader;
+    xx_unpack_handle_t parsed;
     CHECK(open_memory(&in, root, name));
     CHECK((reader = xx_format_create_handle_reader(requested, in.device, 0)) != NULL);
     CHECK(xx_format_is_valid(reader, NULL));
     CHECK(xx_format_handle_base_info(reader, NULL));
     CHECK(reader->file_type == XX_FILE_TYPE_SFX_ZIPCENTRAL);
-    CHECK(reader->handle_type == actual && actual != requested);
-    CHECK(xx_format_get_handle_type(reader) == actual);
+    parsed = xx_format_get_unpack_handle(reader);
+    CHECK(parsed.type == actual.type && parsed.carrier == actual.carrier);
+    CHECK(!(actual.type == requested.type && actual.carrier == requested.carrier));
+    CHECK(reader->handle_type == actual.type && reader->handle_carrier == actual.carrier);
+    CHECK(xx_format_get_handle_type(reader) == actual.type);
     xx_format_free_reader(reader);
     close_memory(&in);
     return 0;
@@ -247,7 +269,7 @@ static int check_bad_pe_carrier(const char *root)
     CHECK(xx_io_seek64(in.device, 7, SEEK_SET) == 0);
     types = xx_format_get_unpack_handle_types_device(in.device, false);
     CHECK(valid_handle_list(types));
-    CHECK(!has(types, XX_HANDLE_TYPE_PE_ZIPSFX));
+    CHECK(!has(types, HANDLE_PE_ZIPSFX));
     CHECK(xx_io_tell(in.device) == 7);
     xx_list_destroy(types);
     close_memory(&in);
@@ -269,11 +291,11 @@ static int check_numbered_split(const char *root)
         types = xx_format_get_unpack_handle_types_device(device, false);
         CHECK(valid_handle_list(types));
         CHECK(xx_io_tell(device) == position);
-        if (i == 0U) CHECK(has(types, XX_HANDLE_TYPE_NUMBERED_SPLIT));
+        if (i == 0U) CHECK(has(types, HANDLE_NUMBERED_SPLIT));
         else if (i == 1U) CHECK(xx_list_count(types) == 0U);
         else {
-            CHECK(has(types, XX_HANDLE_TYPE_GZ) && has(types, XX_HANDLE_TYPE_TAR_GZ));
-            CHECK(!has(types, XX_HANDLE_TYPE_NUMBERED_SPLIT));
+            CHECK(has(types, HANDLE_GZ) && has(types, HANDLE_TAR_GZ));
+            CHECK(!has(types, HANDLE_NUMBERED_SPLIT));
         }
         xx_list_destroy(types);
         CHECK(xx_io_close(device) == 0);
@@ -290,7 +312,7 @@ static int check_pe_identity(const char *root, const char *name)
     CHECK(xx_format_is_valid(&reader.format, NULL));
     CHECK(xx_format_handle_base_info(&reader.format, NULL));
     CHECK(reader.format.file_type == XX_FILE_TYPE_PE32);
-    CHECK(reader.format.handle_type == XX_HANDLE_TYPE_UNKNOWN);
+    CHECK(reader.format.handle_type == XX_FILE_TYPE_UNKNOWN);
     xx_pe_destroy(&reader);
     close_memory(&in);
     return 0;
@@ -304,10 +326,13 @@ static int check_optional_com_sfx(const char *root)
     CHECK(open_memory(&in, root, "com-sfx.bin"));
     reader = xx_format_create_reader(XX_FILE_TYPE_SFX_ZIPCENTRAL, in.device, 0);
     accepted = reader && xx_format_is_valid(reader, NULL) && xx_format_handle_base_info(reader, NULL);
-    if (accepted) CHECK(xx_format_get_handle_type(reader) == XX_HANDLE_TYPE_COM_ZIPSFX);
+    if (accepted) {
+        CHECK(reader->handle_type == XX_FILE_TYPE_SFX_ZIPCENTRAL && reader->handle_carrier == XX_UNPACK_CARRIER_COM);
+        CHECK(xx_format_get_handle_type(reader) == XX_FILE_TYPE_SFX_ZIPCENTRAL);
+    }
     xx_format_free_reader(reader);
     close_memory(&in);
-    if (accepted) CHECK(check_detect(root, "com-sfx.bin", false, XX_HANDLE_TYPE_COM_ZIPSFX, false) == 0);
+    if (accepted) CHECK(check_detect(root, "com-sfx.bin", false, HANDLE_COM_ZIPSFX, false) == 0);
     else puts("COM ZIP SFX fixture is outside the native reader's carrier support; skipped.");
     return 0;
 }
@@ -316,21 +341,18 @@ static int check_domains_and_catalog(void)
 {
     xx_list_t *supported;
     size_t i;
-    CHECK((uint32_t)XX_HANDLE_TYPE_GZ != (uint32_t)XX_FILE_TYPE_GZ);
-    CHECK(xx_format_handle_type_file_type((xx_handle_type_t)XX_FILE_TYPE_GZ) == XX_FILE_TYPE_UNKNOWN);
-    CHECK(xx_format_handle_type_file_type(XX_HANDLE_TYPE_GZ) == XX_FILE_TYPE_GZ);
-    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_GZ) == XX_HANDLE_TYPE_GZ);
-    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_BINARY) == XX_HANDLE_TYPE_UNKNOWN);
-    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_TEXT) == XX_HANDLE_TYPE_UNKNOWN);
-    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_PE32) == XX_HANDLE_TYPE_UNKNOWN);
-    CHECK(xx_format_handle_type_file_type(XX_HANDLE_TYPE_EXECUTABLE_OVERLAY) == XX_FILE_TYPE_EXECUTABLE_OVERLAY);
-    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_EXECUTABLE_OVERLAY) == XX_HANDLE_TYPE_EXECUTABLE_OVERLAY);
+    CHECK((uint32_t)HANDLE_GZ.type == (uint32_t)XX_FILE_TYPE_GZ);
+    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_GZ) == XX_FILE_TYPE_GZ);
+    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_BINARY) == XX_FILE_TYPE_UNKNOWN);
+    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_TEXT) == XX_FILE_TYPE_UNKNOWN);
+    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_PE32) == XX_FILE_TYPE_UNKNOWN);
+    CHECK(xx_format_handle_type_from_file_type(XX_FILE_TYPE_EXECUTABLE_OVERLAY) == XX_FILE_TYPE_EXECUTABLE_OVERLAY);
     supported = xx_format_get_supported_unpack_handle_types();
     CHECK(valid_handle_list(supported));
-    CHECK(has(supported, XX_HANDLE_TYPE_ZIP) && has(supported, XX_HANDLE_TYPE_GZ));
-    CHECK(has(supported, XX_HANDLE_TYPE_EXECUTABLE_OVERLAY));
+    CHECK(has(supported, HANDLE_ZIP) && has(supported, HANDLE_GZ));
+    CHECK(has(supported, HANDLE_EXECUTABLE_OVERLAY));
     for (i = 0; i < xx_list_count(supported); ++i) {
-        xx_file_type_t type = xx_format_handle_type_file_type(*(const xx_handle_type_t *)xx_list_at(supported, i));
+        xx_file_type_t type = ((const xx_unpack_handle_t *)xx_list_at(supported, i))->type;
         CHECK(type != XX_FILE_TYPE_BINARY && type != XX_FILE_TYPE_TEXT && type != XX_FILE_TYPE_PE32 && type != XX_FILE_TYPE_PE64);
     }
     xx_list_destroy(supported);
@@ -367,12 +389,12 @@ static int check_overlay_members_with_reader(const char *root, const char *name,
     /* Public factories present a sliced device with offsets starting at zero;
      * direct native constructors retain coordinates in the original device. */
     reader = native ? (Abstractformat *)xx_executable_overlay_create(in.device, base) :
-                      xx_format_create_handle_reader(XX_HANDLE_TYPE_EXECUTABLE_OVERLAY, in.device, base);
+                      xx_format_create_handle_reader(HANDLE_EXECUTABLE_OVERLAY, in.device, base);
     CHECK(reader != NULL);
     CHECK(xx_format_is_valid(reader, NULL));
     CHECK(xx_format_handle_base_info(reader, NULL));
     CHECK(reader->file_type == XX_FILE_TYPE_EXECUTABLE_OVERLAY && reader->is_archive);
-    CHECK(xx_format_get_handle_type(reader) == XX_HANDLE_TYPE_EXECUTABLE_OVERLAY);
+    CHECK(xx_format_get_handle_type(reader) == XX_FILE_TYPE_EXECUTABLE_OVERLAY);
     CHECK(xx_format_get_number_of_archive_records(reader, NULL) == count);
     CHECK((state = xx_format_create_archive_records_reading(reader, NULL, NULL)) != NULL);
     for (index = 0; index < count; ++index) {
@@ -424,10 +446,10 @@ static int check_no_overlay(const char *root, const char *name)
     CHECK(open_memory(&in, root, name));
     CHECK(xx_io_seek64(in.device, 7, SEEK_SET) == 0);
     types = xx_format_get_unpack_handle_types_device(in.device, true);
-    CHECK(valid_handle_list(types) && !has(types, XX_HANDLE_TYPE_EXECUTABLE_OVERLAY));
+    CHECK(valid_handle_list(types) && !has(types, HANDLE_EXECUTABLE_OVERLAY));
     CHECK(xx_io_tell(in.device) == 7);
     xx_list_destroy(types);
-    CHECK((reader = xx_format_create_handle_reader(XX_HANDLE_TYPE_EXECUTABLE_OVERLAY, in.device, 0)) != NULL);
+    CHECK((reader = xx_format_create_handle_reader(HANDLE_EXECUTABLE_OVERLAY, in.device, 0)) != NULL);
     CHECK(!xx_format_is_valid(reader, NULL));
     xx_format_free_reader(reader);
     close_memory(&in);
@@ -446,7 +468,7 @@ static int check_overlay_disk_extraction(const char *root)
     size_t count = 0;
     CHECK(fixture_path(destination, sizeof(destination), root, "overlay-extracted"));
     CHECK(open_memory(&in, root, "overlay-chain.bin"));
-    CHECK((reader = xx_format_create_handle_reader(XX_HANDLE_TYPE_EXECUTABLE_OVERLAY, in.device, 0)) != NULL);
+    CHECK((reader = xx_format_create_handle_reader(HANDLE_EXECUTABLE_OVERLAY, in.device, 0)) != NULL);
     CHECK(xx_format_is_valid(reader, NULL) && xx_format_handle_base_info(reader, NULL));
     xx_list_init(&options, sizeof(xx_meta), xx_meta_free_elem);
     xx_meta_init(&meta, XX_META_ID_OPT_UNPACK_PATH);
@@ -518,14 +540,14 @@ static int check_executable_overlays(const char *root)
         CHECK(detector != NULL && detector->fast_detect != NULL);
         CHECK(!detector->fast_detect(in.device, 0, false));
         types = xx_format_get_unpack_handle_types_device(in.device, true);
-        CHECK(valid_handle_list(types) && has(types, XX_HANDLE_TYPE_EXECUTABLE_OVERLAY));
+        CHECK(valid_handle_list(types) && has(types, HANDLE_EXECUTABLE_OVERLAY));
         xx_list_destroy(types);
         CHECK(xx_format_get_file_type_device(in.device) == physical);
     }
     close_memory(&in);
     for (i = 0; i < sizeof(positive) / sizeof(positive[0]); ++i) {
-        CHECK(check_detect(root, positive[i], false, XX_HANDLE_TYPE_UNKNOWN, true) == 0);
-        CHECK(check_detect(root, positive[i], true, XX_HANDLE_TYPE_EXECUTABLE_OVERLAY, false) == 0);
+        CHECK(check_detect(root, positive[i], false, HANDLE_UNKNOWN, true) == 0);
+        CHECK(check_detect(root, positive[i], true, HANDLE_EXECUTABLE_OVERLAY, false) == 0);
     }
     for (i = 0; i < sizeof(negative) / sizeof(negative[0]); ++i)
         CHECK(check_no_overlay(root, negative[i]) == 0);
@@ -553,7 +575,7 @@ static int check_executable_overlays(const char *root)
     CHECK(valid_handle_list(types) && xx_list_count(types) == 0U && xx_io_tell(named) == 7);
     xx_list_destroy(types);
     types = xx_format_get_unpack_handle_types_device(named, true);
-    CHECK(valid_handle_list(types) && has(types, XX_HANDLE_TYPE_EXECUTABLE_OVERLAY));
+    CHECK(valid_handle_list(types) && has(types, HANDLE_EXECUTABLE_OVERLAY));
     CHECK(xx_io_tell(named) == 7);
     xx_list_destroy(types);
     CHECK(xx_io_close(named) == 0);
@@ -561,8 +583,8 @@ static int check_executable_overlays(const char *root)
     CHECK(open_memory(&in, root, "pe-sfx.bin"));
     CHECK(xx_io_seek64(in.device, 7, SEEK_SET) == 0);
     types = xx_format_get_unpack_handle_types_device(in.device, true);
-    CHECK(valid_handle_list(types) && has(types, XX_HANDLE_TYPE_PE_ZIPSFX));
-    CHECK(!has(types, XX_HANDLE_TYPE_EXECUTABLE_OVERLAY) && xx_io_tell(in.device) == 7);
+    CHECK(valid_handle_list(types) && has(types, HANDLE_PE_ZIPSFX));
+    CHECK(!has(types, HANDLE_EXECUTABLE_OVERLAY) && xx_io_tell(in.device) == 7);
     xx_list_destroy(types);
     close_memory(&in);
     return 0;
@@ -577,28 +599,28 @@ int main(int argc, char **argv)
     CHECK(check_domains_and_catalog() == 0);
     CHECK(check_stream_and_suffix(argv[1]) == 0);
     CHECK(check_prefixed_zip(argv[1]) == 0);
-    CHECK(check_detect(argv[1], "image", false, XX_HANDLE_TYPE_PNG, false) == 0);
-    CHECK(check_detect(argv[1], "v7.bin", false, XX_HANDLE_TYPE_UNKNOWN, true) == 0);
-    CHECK(check_detect(argv[1], "v7.bin", true, XX_HANDLE_TYPE_TAR, false) == 0);
+    CHECK(check_detect(argv[1], "image", false, HANDLE_PNG, false) == 0);
+    CHECK(check_detect(argv[1], "v7.bin", false, HANDLE_UNKNOWN, true) == 0);
+    CHECK(check_detect(argv[1], "v7.bin", true, HANDLE_TAR, false) == 0);
     CHECK(check_pe_identity(argv[1], "plain.exe") == 0);
     CHECK(check_pe_identity(argv[1], "pe-sfx.bin") == 0);
-    CHECK(check_detect(argv[1], "plain.exe", false, XX_HANDLE_TYPE_UNKNOWN, true) == 0);
-    CHECK(check_detect(argv[1], "pe-sfx.bin", false, XX_HANDLE_TYPE_PE_ZIPSFX, false) == 0);
-    CHECK(check_detect(argv[1], "dos-sfx.bin", false, XX_HANDLE_TYPE_MSDOS_ZIPSFX, false) == 0);
-    CHECK(check_requested_carrier(argv[1], "dos-sfx.bin", XX_HANDLE_TYPE_PE_ZIPSFX, XX_HANDLE_TYPE_MSDOS_ZIPSFX) == 0);
-    CHECK(check_requested_carrier(argv[1], "pe-sfx.bin", XX_HANDLE_TYPE_MSDOS_ZIPSFX, XX_HANDLE_TYPE_PE_ZIPSFX) == 0);
+    CHECK(check_detect(argv[1], "plain.exe", false, HANDLE_UNKNOWN, true) == 0);
+    CHECK(check_detect(argv[1], "pe-sfx.bin", false, HANDLE_PE_ZIPSFX, false) == 0);
+    CHECK(check_detect(argv[1], "dos-sfx.bin", false, HANDLE_MSDOS_ZIPSFX, false) == 0);
+    CHECK(check_requested_carrier(argv[1], "dos-sfx.bin", HANDLE_PE_ZIPSFX, HANDLE_MSDOS_ZIPSFX) == 0);
+    CHECK(check_requested_carrier(argv[1], "pe-sfx.bin", HANDLE_MSDOS_ZIPSFX, HANDLE_PE_ZIPSFX) == 0);
     CHECK(check_bad_pe_carrier(argv[1]) == 0);
     CHECK(check_optional_com_sfx(argv[1]) == 0);
-    CHECK(check_native_reader(argv[1], "archive.zip", XX_FILE_TYPE_ZIP, XX_HANDLE_TYPE_ZIP) == 0);
-    CHECK(check_native_reader(argv[1], "payload.tar.gz", XX_FILE_TYPE_GZ, XX_HANDLE_TYPE_GZ) == 0);
-    CHECK(check_native_reader(argv[1], "payload.tar", XX_FILE_TYPE_TAR, XX_HANDLE_TYPE_TAR) == 0);
+    CHECK(check_native_reader(argv[1], "archive.zip", XX_FILE_TYPE_ZIP, HANDLE_ZIP) == 0);
+    CHECK(check_native_reader(argv[1], "payload.tar.gz", XX_FILE_TYPE_GZ, HANDLE_GZ) == 0);
+    CHECK(check_native_reader(argv[1], "payload.tar", XX_FILE_TYPE_TAR, HANDLE_TAR) == 0);
     CHECK(check_named_empty(argv[1], "misleading.tar.gz") == 0);
     CHECK(check_named_empty(argv[1], "ordinary.txt") == 0);
-    CHECK(check_detect(argv[1], "garbage.bin", true, XX_HANDLE_TYPE_UNKNOWN, true) == 0);
+    CHECK(check_detect(argv[1], "garbage.bin", true, HANDLE_UNKNOWN, true) == 0);
     CHECK(check_numbered_split(argv[1]) == 0);
     CHECK(check_executable_overlays(argv[1]) == 0);
     for (i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i)
-        CHECK(check_detect(argv[1], bad[i], false, XX_HANDLE_TYPE_UNKNOWN, true) == 0);
+        CHECK(check_detect(argv[1], bad[i], false, HANDLE_UNKNOWN, true) == 0);
     puts("Unpack handle API tests passed.");
     return 0;
 }

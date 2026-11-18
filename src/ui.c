@@ -91,7 +91,8 @@ typedef struct ui_job {
     /* The first member the folder view cannot show, escaped as the log
      * escapes it (entries hold the member view's form; see populate_members). */
     char *unsafe_name;
-    xx_handle_type_t *file_types, selected_type;
+    xx_unpack_handle_t *file_types;
+    xx_unpack_handle_t selected_type;
     size_t type_count;
     int have_file_types;
     int types_published; /* Detected types the UI has not shown yet (under mutex). */
@@ -128,14 +129,14 @@ typedef struct ui_state {
     uint64_t password_archive_revision;
     int retrieve_smoke_click;
     size_t retrieve_smoke_member;
-    xx_handle_type_t selected_type;
-    xx_handle_type_t startup_handle;
+    xx_unpack_handle_t selected_type;
+    xx_unpack_handle_t startup_handle;
     int startup_handle_pending;
     size_t file_type_count; /* Entries in the Unpack list. */
-    xx_handle_type_t *offered_types; /* Dynamically sized unpack-handle list. */
+    xx_unpack_handle_t *offered_types; /* Dynamically sized unpack-handle list. */
     int type_chosen; /* selected_type was picked from the list for file_types_path. */
     int selected_not_archive; /* The last run read file_types_path as selected_type: no archive. */
-    xx_handle_type_t members_type; /* Type the members view was listed as. */
+    xx_unpack_handle_t members_type; /* Type the members view was listed as. */
     xfu_command pending_command;
     int pending_extract_selected;
     int type_smoke, type_smoke_stage;
@@ -155,6 +156,10 @@ typedef struct ui_state {
     int context_pending, context_x, context_y;
 #endif
 } ui_state;
+
+static inline bool handle_equal(xx_unpack_handle_t a, xx_unpack_handle_t b) {
+    return a.type == b.type && a.carrier == b.carrier;
+}
 
 static void layout(ui_state *ui, int columns, int rows);
 static void report(xxwidgets_backend backend, const char *message, int error);
@@ -554,16 +559,16 @@ static bool job_cancelled(void *user)
     return cancelled || job->memory_error;
 }
 
-static void job_unpack_handle_types(void *user, const xx_handle_type_t *types, size_t count,
-                                    xx_handle_type_t selected)
+static void job_unpack_handle_types(void *user, const xx_unpack_handle_t *types, size_t count,
+                                    xx_unpack_handle_t selected)
 {
     ui_job *job = (ui_job *)user;
-    xx_handle_type_t *copy = NULL;
+    xx_unpack_handle_t *copy = NULL;
     if (count > INT_MAX || count > SIZE_MAX / sizeof(*copy) || (count && !types)) {
         mutex_lock(&job->mutex); job->memory_error = 1; mutex_unlock(&job->mutex); return;
     }
     if (count) {
-        copy = (xx_handle_type_t *)malloc(count * sizeof(*copy));
+        copy = (xx_unpack_handle_t *)malloc(count * sizeof(*copy));
         if (copy) memcpy(copy, types, count * sizeof(*copy));
     }
     mutex_lock(&job->mutex);
@@ -678,7 +683,7 @@ static void show_detected_types(ui_state *ui, ui_job *job)
     mutex_lock(&job->mutex);
     published = job->types_published;
     if (published && job->type_count) {
-        detected.file_types = (xx_handle_type_t *)malloc(job->type_count * sizeof(*detected.file_types));
+        detected.file_types = (xx_unpack_handle_t *)malloc(job->type_count * sizeof(*detected.file_types));
         if (!detected.file_types) { job->memory_error = 1; published = 0; }
         else memcpy(detected.file_types, job->file_types, job->type_count * sizeof(*detected.file_types));
     }
@@ -690,7 +695,7 @@ static void show_detected_types(ui_state *ui, ui_job *job)
     mutex_unlock(&job->mutex);
     if (published && !job->retrieve_password) {
         detected.archive_path = job->archive_path;
-        detected.request.handle_type = job->request.handle_type;
+        detected.request.handle = job->request.handle;
         keep_offered_types(ui, &detected);
         if (detected.memory_error || !populate_file_types(ui, &detected)) {
             mutex_lock(&job->mutex); job->memory_error = 1; mutex_unlock(&job->mutex);
@@ -981,7 +986,7 @@ static void append_log(ui_state *ui, const char *line)
 /* Extract and Test require a detected unpack handle and a usable reader. */
 static int archive_actions(const ui_state *ui)
 {
-    return ui->file_type_count && ui->selected_type != XX_HANDLE_TYPE_UNKNOWN && !ui->selected_not_archive;
+    return ui->file_type_count && ui->selected_type.type != XX_FILE_TYPE_UNKNOWN && !ui->selected_not_archive;
 }
 
 static void set_busy(ui_state *ui, int busy)
@@ -1210,20 +1215,22 @@ static int handle_name_equal(const char *left, const char *right) {
     }
 }
 
-static int parse_unpack_handle(const char *name, xx_handle_type_t *handle) {
+static int parse_unpack_handle(const char *name, xx_unpack_handle_t *handle) {
     xx_list_t *supported;
     size_t i;
     unsigned long numeric = 0;
     int is_numeric = 0, found = 0;
     char *end;
     if (!name || !*name) return 0;
-    if (strlen(name) >= 15) {
-        char prefix[16];
-        memcpy(prefix, name, 15); prefix[15] = 0;
-        if (handle_name_equal(prefix, "XX_HANDLE_TYPE_")) name += 15;
+    if (strlen(name) >= 13) {
+        char prefix[14];
+        memcpy(prefix, name, 13); prefix[13] = 0;
+        if (handle_name_equal(prefix, "XX_FILE_TYPE_")) name += 13;
     }
     if (handle_name_equal(name, "auto") || handle_name_equal(name, "automatic")) {
-        *handle = XX_HANDLE_TYPE_UNKNOWN; return 1;
+        handle->type = XX_FILE_TYPE_UNKNOWN;
+        handle->carrier = XX_UNPACK_CARRIER_NONE;
+        return 1;
     }
     if (handle_name_equal(name, "gzip")) name = "gz";
     else if (handle_name_equal(name, "bzip2")) name = "bz2";
@@ -1233,16 +1240,20 @@ static int parse_unpack_handle(const char *name, xx_handle_type_t *handle) {
         /* 7ZIP is a name, not a malformed numeric ID. */
         if (!*end) {
             if (errno || numeric > UINT32_MAX) return 0;
-            if (!numeric) { *handle = XX_HANDLE_TYPE_UNKNOWN; return 1; }
+            if (!numeric) {
+                handle->type = XX_FILE_TYPE_UNKNOWN;
+                handle->carrier = XX_UNPACK_CARRIER_NONE;
+                return 1;
+            }
             is_numeric = 1;
         }
     }
     supported = xx_format_get_supported_unpack_handle_types();
     if (!supported) return 0;
     for (i = 0; i < xx_list_count(supported); ++i) {
-        xx_handle_type_t candidate = *(const xx_handle_type_t *)xx_list_at(supported, i);
-        if ((is_numeric && numeric == (unsigned long)candidate) ||
-            (!is_numeric && handle_name_equal(name, xx_format_handle_type_to_string(candidate)))) {
+        xx_unpack_handle_t candidate = *(const xx_unpack_handle_t *)xx_list_at(supported, i);
+        if ((is_numeric && candidate.carrier == XX_UNPACK_CARRIER_NONE && numeric == (unsigned long)candidate.type) ||
+            (!is_numeric && handle_name_equal(name, xx_format_unpack_handle_to_string(candidate)))) {
             *handle = candidate; found = 1; break;
         }
     }
@@ -1251,16 +1262,16 @@ static int parse_unpack_handle(const char *name, xx_handle_type_t *handle) {
 }
 
 
-static const char *unpack_handle_label(xx_handle_type_t type)
+static const char *unpack_handle_label(xx_unpack_handle_t type)
 {
-    return type == XX_HANDLE_TYPE_UNKNOWN ? "Automatic" : xx_format_handle_type_to_string(type);
+    return type.type == XX_FILE_TYPE_UNKNOWN ? "Automatic" : xx_format_unpack_handle_to_string(type);
 }
 
 static int populate_file_types(ui_state *ui, const ui_job *job)
 {
     xx_meta_string *records = NULL;
     xx_str_w_s *labels = NULL;
-    xx_handle_type_t *offered = NULL;
+    xx_unpack_handle_t *offered = NULL;
     char *path = NULL;
     size_t i, selected = 0, displayed = job->type_count ? job->type_count : 1;
     int result = 0, found = 0;
@@ -1269,14 +1280,14 @@ static int populate_file_types(ui_state *ui, const ui_job *job)
     records = (xx_meta_string *)calloc(displayed, sizeof(*records));
     labels = (xx_str_w_s *)calloc(displayed, sizeof(*labels));
     path = copy_text(job->archive_path);
-    if (job->type_count) offered = (xx_handle_type_t *)malloc(job->type_count * sizeof(*offered));
+    if (job->type_count) offered = (xx_unpack_handle_t *)malloc(job->type_count * sizeof(*offered));
     if (!records || !labels || !path || (job->type_count && !offered)) goto done;
     if (job->type_count) {
         memcpy(offered, job->file_types, job->type_count * sizeof(*offered));
         selected = job->type_count - 1;
     }
     for (i = 0; i < displayed; ++i) {
-        xx_handle_type_t type = job->type_count ? job->file_types[i] : XX_HANDLE_TYPE_UNKNOWN;
+        xx_unpack_handle_t type = job->type_count ? job->file_types[i] : (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
         const char *label = !job->type_count && job->archive_path[0] ? "No unpacker" : unpack_handle_label(type);
         labels[i].data = xx_str_utf8_to_unicode(label);
         if (!labels[i].data) goto done;
@@ -1284,13 +1295,13 @@ static int populate_file_types(ui_state *ui, const ui_job *job)
         labels[i].capacity = labels[i].length + 1; labels[i].is_view = true;
         records[i].meta_string = labels + i;
         records[i].var.type = XX_VAR_TYPE_UINT32;
-        records[i].var.val.u32 = (uint32_t)type;
-        if (type == job->selected_type) { selected = i; found = 1; }
+        records[i].var.val.u32 = (uint32_t)type.type;
+        if (handle_equal(type, job->selected_type)) { selected = i; found = 1; }
     }
     if (xxwidgets_combobox_set_records(ui->file_type, records, displayed) != XXWIDGETS_OK ||
         xxwidgets_widget_set_value(ui->file_type, (int)selected) != XXWIDGETS_OK) goto done;
     free(ui->file_types_path); ui->file_types_path = path; path = NULL;
-    ui->selected_type = job->type_count ? job->file_types[selected] : XX_HANDLE_TYPE_UNKNOWN;
+    ui->selected_type = job->type_count ? job->file_types[selected] : (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
     ui->file_type_count = job->type_count;
     free(ui->offered_types); ui->offered_types = offered; offered = NULL;
     ui->selected_not_archive = 0;
@@ -1438,7 +1449,7 @@ static int populate_members(ui_state *ui, ui_job *job)
         ui->listed_entries = job->entries; ui->listed_count = job->entry_count;
         job->entries = NULL; job->entry_count = job->entry_capacity = 0;
         free(ui->members_archive); ui->members_archive = copy_text(job->archive_path);
-        ui->members_type = job->have_file_types ? job->selected_type : job->request.handle_type;
+        ui->members_type = job->have_file_types ? job->selected_type : job->request.handle;
         if (!autofill_listing_password(ui, job)) return 0;
         update_metadata(ui);
         return 1;
@@ -1462,7 +1473,7 @@ static int populate_members(ui_state *ui, ui_job *job)
     job->entries = NULL;
     job->entry_count = job->entry_capacity = 0;
     free(ui->members_archive); ui->members_archive = copy_text(job->archive_path);
-    ui->members_type = job->have_file_types ? job->selected_type : job->request.handle_type;
+    ui->members_type = job->have_file_types ? job->selected_type : job->request.handle;
     if (!autofill_listing_password(ui, job)) return 0;
     update_metadata(ui);
     return 1;
@@ -1479,7 +1490,7 @@ static int clear_members(ui_state *ui)
     if (status != XXWIDGETS_OK) return 0;
     free(ui->browser_sources); ui->browser_sources = NULL; ui->browser_count = 0;
     free(ui->members_archive); ui->members_archive = NULL;
-    ui->members_type = XX_HANDLE_TYPE_UNKNOWN;
+    ui->members_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
     free_entries(ui->listed_entries, ui->listed_count);
     ui->listed_entries = NULL; ui->listed_count = 0;
     update_metadata(ui);
@@ -1598,11 +1609,11 @@ static int start_job(ui_state *ui, xfu_command command)
      * detected again: the file at that path may have changed since (a
      * finished download, another archive or a non-archive put there). */
     if (requested_type || (known_file && ui->type_chosen))
-        job->request.handle_type = ui->selected_type;
-    else if (!known_file) { ui->selected_type = XX_HANDLE_TYPE_UNKNOWN; ui->type_chosen = 0; }
-    if (ui->selected_type == XX_HANDLE_TYPE_UNKNOWN) {
+        job->request.handle = ui->selected_type;
+    else if (!known_file) { ui->selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE}; ui->type_chosen = 0; }
+    if (ui->selected_type.type == XX_FILE_TYPE_UNKNOWN) {
         ui_job initial = {0};
-        initial.archive_path = ""; initial.selected_type = XX_HANDLE_TYPE_UNKNOWN;
+        initial.archive_path = ""; initial.selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
         if (!populate_file_types(ui, &initial)) {
             show_status(ui, "Cannot reset the file type list."); job_destroy(job); return 0;
         }
@@ -1762,8 +1773,8 @@ static int keep_listing(const ui_state *ui, const ui_job *job, int cancelled)
     size_t i;
     if (job->request.command == XFU_COMMAND_LIST || job->retrieve_password || !ui->listed_count ||
         !ui->file_types_path || strcmp(ui->file_types_path, job->archive_path)) return 0;
-    if (job->have_file_types && ui->members_type != XX_HANDLE_TYPE_UNKNOWN) {
-        for (i = 0; i < job->type_count && job->file_types[i] != ui->members_type; ++i) {}
+    if (job->have_file_types && ui->members_type.type != XX_FILE_TYPE_UNKNOWN) {
+        for (i = 0; i < job->type_count && !handle_equal(job->file_types[i], ui->members_type); ++i) {}
         if (i == job->type_count) return 0;
     }
     if (job->entry_count > ui->listed_count) return 0;
@@ -1785,17 +1796,17 @@ static int keep_listing(const ui_state *ui, const ui_job *job, int cancelled)
 static void keep_offered_types(const ui_state *ui, ui_job *job)
 {
     size_t i, j;
-    if (job->request.handle_type == XX_HANDLE_TYPE_UNKNOWN || !ui->file_types_path ||
+    if (job->request.handle.type == XX_FILE_TYPE_UNKNOWN || !ui->file_types_path ||
         strcmp(ui->file_types_path, job->archive_path) || job->type_count >= ui->file_type_count)
         return;
-    for (i = 0; i < job->type_count && job->file_types[i] != job->selected_type; ++i) {}
+    for (i = 0; i < job->type_count && !handle_equal(job->file_types[i], job->selected_type); ++i) {}
     if (i == job->type_count) return; /* The pick does not fit the file. */
     for (i = 0; i < job->type_count; ++i) {
-        for (j = 0; j < ui->file_type_count && ui->offered_types[j] != job->file_types[i]; ++j) {}
+        for (j = 0; j < ui->file_type_count && !handle_equal(ui->offered_types[j], job->file_types[i]); ++j) {}
         if (j == ui->file_type_count) return;
     }
     {
-        xx_handle_type_t *copy = (xx_handle_type_t *)malloc(ui->file_type_count * sizeof(*copy));
+        xx_unpack_handle_t *copy = (xx_unpack_handle_t *)malloc(ui->file_type_count * sizeof(*copy));
         if (!copy) { job->memory_error = 1; return; }
         memcpy(copy, ui->offered_types, ui->file_type_count * sizeof(*copy));
         free(job->file_types); job->file_types = copy;
@@ -1942,22 +1953,22 @@ static void drain_job(ui_state *ui)
         /* A startup selection follows the same controller path as a real
          * combobox choice. Smoke mode verifies the actual widget value too,
          * so a successful extraction cannot hide a different selected handle. */
-        if (ui->smoke && ui->startup_handle != XX_HANDLE_TYPE_UNKNOWN && job->result != 2) {
+        if (ui->smoke && ui->startup_handle.type != XX_FILE_TYPE_UNKNOWN && job->result != 2) {
             xx_var value = {0};
-            if (job->request.handle_type != ui->startup_handle ||
-                !job->have_file_types || job->selected_type != ui->startup_handle ||
-                ui->selected_type != ui->startup_handle ||
+            if (!handle_equal(job->request.handle, ui->startup_handle) ||
+                !job->have_file_types || !handle_equal(job->selected_type, ui->startup_handle) ||
+                !handle_equal(ui->selected_type, ui->startup_handle) ||
                 xxwidgets_combobox_get_current(ui->file_type, &value) != XXWIDGETS_OK ||
-                value.type != XX_VAR_TYPE_UINT32 || value.val.u32 != (uint32_t)ui->startup_handle) {
+                value.type != XX_VAR_TYPE_UINT32 || value.val.u32 != (uint32_t)ui->startup_handle.type) {
                 fputs("Startup unpack handle: controller/combobox selection mismatch.\n", stderr);
                 append_log(ui, "Could not select the requested unpack handle."); job->result = 2;
             } else fprintf(stderr, "Startup unpack handle: %s (%u)\n",
-                unpack_handle_label(ui->startup_handle), (unsigned)ui->startup_handle);
+                unpack_handle_label(ui->startup_handle), (unsigned)ui->startup_handle.type);
         }
     }
     /* No Test or Extract for a type the run found is not an archive. */
     if (job->not_archive && ui->file_types_path && !strcmp(ui->file_types_path, job->archive_path) &&
-        ui->selected_type == job->selected_type) ui->selected_not_archive = 1;
+        handle_equal(ui->selected_type, job->selected_type)) ui->selected_not_archive = 1;
     if ((!job->retrieve_password || (job->result == 0 && !cancelled && retrieval_current)) &&
         !job->request.extract_selected &&
         !keep_listing(ui, job, cancelled)) {
@@ -2274,7 +2285,7 @@ static void run_native_action(ui_state *ui)
     if (!archive_actions(ui) &&
         (action == XFU_SHELL_EXTRACT || action == XFU_SHELL_EXTRACT_SELECTED || action == XFU_SHELL_TEST)) {
         char message[128];
-        if (ui->selected_type == XX_HANDLE_TYPE_UNKNOWN)
+        if (ui->selected_type.type == XX_FILE_TYPE_UNKNOWN)
             snprintf(message, sizeof(message), "Open an archive with a supported unpacker first.");
         else snprintf(message, sizeof(message), "%s cannot be opened as an archive. Choose another unpacker.",
                       unpack_handle_label(ui->selected_type));
@@ -2574,7 +2585,23 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
             char *path = widget_text(ui->archive_path);
             if (!path) { show_status(ui, "Cannot read the file path."); return; }
             free(ui->pending_type_path); ui->pending_type_path = path;
-            ui->selected_type = (xx_handle_type_t)value.val.u32;
+            {
+                int idx = -1;
+                if (xxwidgets_widget_get_value(ui->file_type, &idx) == XXWIDGETS_OK && idx >= 0 && (size_t)idx < ui->file_type_count && ui->offered_types) {
+                    ui->selected_type = ui->offered_types[idx];
+                } else if (ui->offered_types) {
+                    size_t k;
+                    ui->selected_type = (xx_unpack_handle_t){(xx_file_type_t)value.val.u32, XX_UNPACK_CARRIER_NONE};
+                    for (k = 0; k < ui->file_type_count; ++k) {
+                        if (ui->offered_types[k].type == (xx_file_type_t)value.val.u32) {
+                            ui->selected_type = ui->offered_types[k];
+                            break;
+                        }
+                    }
+                } else {
+                    ui->selected_type = (xx_unpack_handle_t){(xx_file_type_t)value.val.u32, XX_UNPACK_CARRIER_NONE};
+                }
+            }
             ui->type_chosen = 1;
             if (!clear_members(ui)) show_status(ui, "Cannot clear the previous archive listing.");
             ui->pending_extract_selected = 0;
@@ -2947,7 +2974,7 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
 #undef CONTROL
     {
         ui_job initial = {0};
-        initial.archive_path = ""; initial.selected_type = XX_HANDLE_TYPE_UNKNOWN;
+        initial.archive_path = ""; initial.selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
         if (!populate_file_types(ui, &initial)) return 0;
     }
     if (xxwidgets_widget_set_value(ui->advanced, ui->advanced_visible) != XXWIDGETS_OK) return 0;
@@ -3011,7 +3038,7 @@ static const char ui_usage[] =
     "Without a command, an archive path opens its listing.\n"
     "-o<dir>: output directory for x (default: the current directory).\n"
     "--handle <name|id>: select an unpack handle in the Unpack list (default: Automatic).\n"
-    "Names and XX_HANDLE_TYPE_* names are case-insensitive; IDs use the handle enum.\n"
+    "Names and XX_FILE_TYPE_* names are case-insensitive; IDs use the file-type enum.\n"
     "-p<password>: initialize the editable Password field (-p for an empty password).\n"
     "Recovered passwords autofill unless edited; manual input is literal.\n"
     "Automatic values allow per-member recovery; explicit input overrides it.\n"
@@ -3389,24 +3416,24 @@ static int smoke_widgets(ui_state *ui)
      * inspection chain. Exercise a larger list and its empty placeholder. */
     {
         xx_list_t *supported = xx_format_get_supported_unpack_handle_types();
-        xx_handle_type_t many[12];
+        xx_unpack_handle_t many[12];
         ui_job sample = {0};
         xx_var selected = {0};
         size_t i;
         int valid = supported && xx_list_count(supported) >= 12;
         for (i = 0; valid && i < 12; ++i)
-            many[i] = *(const xx_handle_type_t *)xx_list_at(supported, i);
+            many[i] = *(const xx_unpack_handle_t *)xx_list_at(supported, i);
         sample.archive_path = "";
         sample.file_types = many; sample.type_count = 12;
-        sample.selected_type = valid ? many[11] : XX_HANDLE_TYPE_UNKNOWN;
+        sample.selected_type = valid ? many[11] : (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
         if (valid) valid = populate_file_types(ui, &sample) &&
             xxwidgets_combobox_count(ui->file_type) == 12 && ui->file_type_count == 12 &&
             xxwidgets_combobox_get_current(ui->file_type, &selected) == XXWIDGETS_OK &&
-            selected.type == XX_VAR_TYPE_UINT32 && selected.val.u32 == (uint32_t)many[11];
-        sample.file_types = NULL; sample.type_count = 0; sample.selected_type = XX_HANDLE_TYPE_UNKNOWN;
+            selected.type == XX_VAR_TYPE_UINT32 && selected.val.u32 == (uint32_t)many[11].type;
+        sample.file_types = NULL; sample.type_count = 0; sample.selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
         if (valid) valid = populate_file_types(ui, &sample) &&
             xxwidgets_combobox_count(ui->file_type) == 1 && ui->file_type_count == 0 &&
-            ui->selected_type == XX_HANDLE_TYPE_UNKNOWN && !archive_actions(ui);
+            ui->selected_type.type == XX_FILE_TYPE_UNKNOWN && !archive_actions(ui);
         xx_list_destroy(supported);
         if (!valid) return 0;
     }
@@ -3645,7 +3672,7 @@ static void smoke_file_types(ui_state *ui)
     if (xxwidgets_combobox_get_current(ui->file_type, &value) != XXWIDGETS_OK ||
         value.type != XX_VAR_TYPE_UINT32) valid = 0;
     if (ui->type_smoke_stage != 3) {
-        static const xx_handle_type_t handles[] = {XX_HANDLE_TYPE_GZ, XX_HANDLE_TYPE_TAR_GZ};
+        static const xx_file_type_t handles[] = {XX_FILE_TYPE_GZ, XX_FILE_TYPE_TAR_GZ};
         if (xxwidgets_combobox_count(ui->file_type) != 2) valid = 0;
         for (i = 0; i < 2; ++i) {
             if (xxwidgets_combobox_get_record(ui->file_type, i, &record) != XXWIDGETS_OK ||
@@ -3654,21 +3681,21 @@ static void smoke_file_types(ui_state *ui)
     }
     switch (ui->type_smoke_stage) {
     case 0:
-        valid = valid && value.val.u32 == XX_HANDLE_TYPE_TAR_GZ && ui->listed_count == 2;
+        valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
         next = 0; break;
     case 1:
-        valid = valid && value.val.u32 == XX_HANDLE_TYPE_GZ && ui->listed_count == 1 &&
+        valid = valid && value.val.u32 == XX_FILE_TYPE_GZ && ui->listed_count == 1 &&
             ui->listed_entries[0].unpacked_size >= 2048;
         next = 1; break;
     case 2:
-        valid = valid && value.val.u32 == XX_HANDLE_TYPE_TAR_GZ && ui->listed_count == 2;
+        valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
         change_path = 1; break;
     case 3:
-        valid = valid && value.val.u32 == XX_HANDLE_TYPE_ZIP && ui->listed_count == 2 &&
+        valid = valid && value.val.u32 == XX_FILE_TYPE_ZIP && ui->listed_count == 2 &&
             xxwidgets_combobox_count(ui->file_type) == 1;
         change_path = 2; break;
     case 4:
-        valid = valid && value.val.u32 == XX_HANDLE_TYPE_TAR_GZ && ui->listed_count == 2;
+        valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
         if (valid) { ui->exit_code = 0; ui->running = 0; return; }
         break;
     default: valid = 0; break;
@@ -3931,7 +3958,7 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
         ui.pending_type_path = copy_text(archive);
         if (!ui.pending_type_path) { ui.exit_code = 2; goto cleanup; }
         ui.selected_type = ui.startup_handle;
-        ui.type_chosen = ui.startup_handle != XX_HANDLE_TYPE_UNKNOWN;
+        ui.type_chosen = ui.startup_handle.type != XX_FILE_TYPE_UNKNOWN;
         ui.startup_handle_pending = 1;
     }
     if (password) ui.password_manual = 1;

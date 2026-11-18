@@ -32,8 +32,8 @@ typedef struct capture {
     char names[2][64];
     size_t not_archive_calls;
     xx_file_type_t not_archive;
-    xx_handle_type_t selected_handle;
-    xx_handle_type_t handles[16];
+    xx_unpack_handle_t selected_handle;
+    xx_unpack_handle_t handles[16];
     size_t handle_count;
     bool selected_handle_available;
     bool actionable_handles;
@@ -65,8 +65,8 @@ static void entry(void *user, const xfu_entry *item) {
     ++state->entries;
 }
 
-static void unpack_handle_types(void *user, const xx_handle_type_t *types,
-                                 size_t count, xx_handle_type_t selected) {
+static void unpack_handle_types(void *user, const xx_unpack_handle_t *types,
+                                size_t count, xx_unpack_handle_t selected) {
     capture *state = (capture *)user;
     size_t i;
     state->selected_handle = selected;
@@ -74,11 +74,11 @@ static void unpack_handle_types(void *user, const xx_handle_type_t *types,
     state->selected_handle_available = false;
     state->actionable_handles = true;
     for (i = 0; i < count; ++i) {
-        xx_file_type_t file_type = xx_format_handle_type_file_type(types[i]);
+        xx_file_type_t file_type = types[i].type;
         if (i < sizeof(state->handles) / sizeof(state->handles[0]))
             state->handles[i] = types[i];
-        if (types[i] == selected) state->selected_handle_available = true;
-        if (types[i] == XX_HANDLE_TYPE_UNKNOWN || file_type == XX_FILE_TYPE_UNKNOWN ||
+        if (types[i].type == selected.type && types[i].carrier == selected.carrier) state->selected_handle_available = true;
+        if (types[i].type == XX_FILE_TYPE_UNKNOWN || file_type == XX_FILE_TYPE_UNKNOWN ||
             file_type == XX_FILE_TYPE_BINARY || file_type == XX_FILE_TYPE_ARCHIVE ||
             file_type == XX_FILE_TYPE_PE32 || file_type == XX_FILE_TYPE_PE64 ||
             file_type == XX_FILE_TYPE_MSDOS || file_type == XX_FILE_TYPE_COM)
@@ -86,10 +86,10 @@ static void unpack_handle_types(void *user, const xx_handle_type_t *types,
     }
 }
 
-static bool captured_handle(const capture *state, xx_handle_type_t type) {
+static bool captured_handle(const capture *state, xx_unpack_handle_t handle) {
     size_t i;
     for (i = 0; i < state->handle_count && i < sizeof(state->handles) / sizeof(state->handles[0]); ++i)
-        if (state->handles[i] == type) return true;
+        if (state->handles[i].type == handle.type && state->handles[i].carrier == handle.carrier) return true;
     return false;
 }
 
@@ -934,36 +934,36 @@ int main(int argc, char **argv) {
     CHECK(strcmp(listed.names[0], "first.txt") == 0);
     CHECK(strcmp(listed.names[1], "second.txt") == 0);
     CHECK(listed.actionable_handles && listed.selected_handle_available);
-    CHECK(listed.selected_handle == XX_HANDLE_TYPE_TAR_GZ);
-    CHECK(captured_handle(&listed, XX_HANDLE_TYPE_GZ));
-    CHECK(captured_handle(&listed, XX_HANDLE_TYPE_TAR_GZ));
+    CHECK(listed.selected_handle.type == XX_FILE_TYPE_TAR_GZ && listed.selected_handle.carrier == XX_UNPACK_CARRIER_NONE);
+    CHECK(captured_handle(&listed, (xx_unpack_handle_t){XX_FILE_TYPE_GZ, XX_UNPACK_CARRIER_NONE}));
+    CHECK(captured_handle(&listed, (xx_unpack_handle_t){XX_FILE_TYPE_TAR_GZ, XX_UNPACK_CARRIER_NONE}));
 
     /* Both unpack methods apply to the same input. The independent handle
      * selection controls whether its TAR is a single member or is opened. */
     memset(&probed, 0, sizeof(probed));
     request = request_for(&probed, XFU_COMMAND_LIST, archive);
-    request.handle_type = XX_HANDLE_TYPE_GZ;
+    request.handle = (xx_unpack_handle_t){XX_FILE_TYPE_GZ, XX_UNPACK_CARRIER_NONE};
     CHECK(xfu_run(&request) == 0);
-    CHECK(probed.entries == 1 && probed.selected_handle == XX_HANDLE_TYPE_GZ);
+    CHECK(probed.entries == 1 && probed.selected_handle.type == XX_FILE_TYPE_GZ && probed.selected_handle.carrier == XX_UNPACK_CARRIER_NONE);
     CHECK(probed.actionable_handles && probed.selected_handle_available);
-    CHECK(captured_handle(&probed, XX_HANDLE_TYPE_TAR_GZ));
+    CHECK(captured_handle(&probed, (xx_unpack_handle_t){XX_FILE_TYPE_TAR_GZ, XX_UNPACK_CARRIER_NONE}));
     memset(&probed, 0, sizeof(probed));
     request = request_for(&probed, XFU_COMMAND_LIST, archive);
-    request.handle_type = XX_HANDLE_TYPE_TAR_GZ;
+    request.handle = (xx_unpack_handle_t){XX_FILE_TYPE_TAR_GZ, XX_UNPACK_CARRIER_NONE};
     CHECK(xfu_run(&request) == 0);
-    CHECK(probed.entries == 2 && probed.selected_handle == XX_HANDLE_TYPE_TAR_GZ);
+    CHECK(probed.entries == 2 && probed.selected_handle.type == XX_FILE_TYPE_TAR_GZ && probed.selected_handle.carrier == XX_UNPACK_CARRIER_NONE);
     CHECK(strcmp(probed.names[0], "first.txt") == 0);
     CHECK(probed.actionable_handles && probed.selected_handle_available);
 
     memset(&probed, 0, sizeof(probed));
     request = request_for(&probed, XFU_COMMAND_LIST, archive);
-    request.handle_type = XX_HANDLE_TYPE_ZIP;
+    request.handle = (xx_unpack_handle_t){XX_FILE_TYPE_ZIP, XX_UNPACK_CARRIER_NONE};
     CHECK(xfu_run(&request) == 2);
     CHECK(probed.entries == 0);
-    request.handle_type = (xx_handle_type_t)XX_FILE_TYPE_TAR_GZ;
+    request.handle = (xx_unpack_handle_t){(xx_file_type_t)999999, XX_UNPACK_CARRIER_NONE};
     CHECK(xfu_run(&request) == 2);
     CHECK(probed.entries == 0);
-    request.handle_type = XX_HANDLE_TYPE_TAR_GZ;
+    request.handle = (xx_unpack_handle_t){XX_FILE_TYPE_TAR_GZ, XX_UNPACK_CARRIER_NONE};
     request.file_type = XX_FILE_TYPE_GZ;
     CHECK(xfu_run(&request) == 2);
     request.file_type = XX_FILE_TYPE_UNKNOWN;
@@ -1102,14 +1102,14 @@ int main(int argc, char **argv) {
         CHECK(xfu_run(&request) == 2);
         CHECK(probed.entries == 0 && probed.selected == XX_FILE_TYPE_TEXT);
         CHECK(probed.not_archive_calls == 1 && probed.not_archive == XX_FILE_TYPE_TEXT);
-        CHECK(probed.handle_count == 0 && probed.selected_handle == XX_HANDLE_TYPE_UNKNOWN);
+        CHECK(probed.handle_count == 0 && probed.selected_handle.type == XX_FILE_TYPE_UNKNOWN);
         CHECK(!xx_io_file_exists_a(notes_output));
     }
     memset(&probed, 0, sizeof(probed));
     request = request_for(&probed, XFU_COMMAND_LIST, blob);
     CHECK(xfu_run(&request) == 2);
     CHECK(probed.not_archive_calls == 1 && probed.not_archive == XX_FILE_TYPE_BINARY);
-    CHECK(probed.handle_count == 0 && probed.selected_handle == XX_HANDLE_TYPE_UNKNOWN);
+    CHECK(probed.handle_count == 0 && probed.selected_handle.type == XX_FILE_TYPE_UNKNOWN);
 
     /* A split series has no password: an explicitly empty one, or one typed
      * for another archive, reads it as no password does. */
@@ -1170,19 +1170,19 @@ int main(int argc, char **argv) {
     }
     memset(&probed, 0, sizeof(probed));
     request = request_for(&probed, XFU_COMMAND_EXTRACT, wrapped);
-    request.handle_type = XX_HANDLE_TYPE_TAR;
+    request.handle = (xx_unpack_handle_t){XX_FILE_TYPE_TAR, XX_UNPACK_CARRIER_NONE};
     request.output_dir = wrapped_output;
     CHECK(xfu_run(&request) == 0);
     CHECK(make_path(output_second, sizeof(output_second), wrapped_output, "second.txt"));
     CHECK(content_matches(output_second, "second member\n"));
-    CHECK(probed.selected_handle == XX_HANDLE_TYPE_TAR && probed.selected_handle_available);
-    CHECK(captured_handle(&probed, XX_HANDLE_TYPE_UUE));
-    CHECK(captured_handle(&probed, XX_HANDLE_TYPE_TAR));
+    CHECK(probed.selected_handle.type == XX_FILE_TYPE_TAR && probed.selected_handle.carrier == XX_UNPACK_CARRIER_NONE && probed.selected_handle_available);
+    CHECK(captured_handle(&probed, (xx_unpack_handle_t){XX_FILE_TYPE_UUE, XX_UNPACK_CARRIER_NONE}));
+    CHECK(captured_handle(&probed, (xx_unpack_handle_t){XX_FILE_TYPE_TAR, XX_UNPACK_CARRIER_NONE}));
     memset(&probed, 0, sizeof(probed));
     request = request_for(&probed, XFU_COMMAND_LIST, wrapped);
-    request.handle_type = XX_HANDLE_TYPE_UUE;
+    request.handle = (xx_unpack_handle_t){XX_FILE_TYPE_UUE, XX_UNPACK_CARRIER_NONE};
     CHECK(xfu_run(&request) == 0);
-    CHECK(probed.entries == 1 && probed.selected_handle == XX_HANDLE_TYPE_UUE);
+    CHECK(probed.entries == 1 && probed.selected_handle.type == XX_FILE_TYPE_UUE && probed.selected_handle.carrier == XX_UNPACK_CARRIER_NONE);
     CHECK(probed.actionable_handles && probed.selected_handle_available);
     memset(&probed, 0, sizeof(probed));
     request = request_for(&probed, XFU_COMMAND_ADD, wrapped_raw);

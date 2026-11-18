@@ -236,7 +236,7 @@ class ArchiveCompatibility(unittest.TestCase):
                 item.size = len(data)
                 output.addfile(item, io.BytesIO(data))
         (self.root / "handles.tar.gz").write_bytes(gzip.compress(archive.getvalue(), mtime=0))
-        for name in ("TAR_GZ", "tar.gz", "XX_HANDLE_TYPE_TAR_GZ", "auto"):
+        for name in ("TAR_GZ", "tar.gz", "XX_FILE_TYPE_TAR_GZ", "auto"):
             with self.subTest(handle=name):
                 listing = self.run_xfu("l", "handles.tar.gz", "--handle", name)
                 self.assertIn("2 member(s)", listing.stdout)

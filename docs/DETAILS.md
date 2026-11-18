@@ -141,7 +141,7 @@ GARbro selectors and automatic GARbro fallback are unavailable in the
 xxfclib-only build. Native game and resource readers remain selectable.
 
 The GUI and TUI have an **Unpack** combobox populated with unpack handles
-(`XX_HANDLE_TYPE_*`), independently of physical `XX_FILE_TYPE_*` identification.
+(`xx_unpack_handle_t`), independently of physical `XX_FILE_TYPE_*` identification.
 A `sample.tar.gz` offers `GZ` and `TAR_GZ`, with `TAR_GZ` selected automatically.
 Selecting `GZ` shows its TAR payload as one member; selecting `TAR_GZ` shows
 its files and folders. Listing, extraction, and testing use the selected handle.
