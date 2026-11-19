@@ -52,6 +52,7 @@ typedef pthread_t ui_thread;
 #define UI_DISPLAY_LOGS 1000
 #define UI_SETTING_ADVANCED "UI/Advanced"
 #define UI_SETTING_LOG "UI/OperationLog"
+#define UI_SETTING_FORCE "UI/Force"
 
 typedef struct ui_job {
     xfu_request request;
@@ -110,7 +111,7 @@ typedef struct ui_state {
     xxwidgets_widget *password_label, *password, *get_password;
     xxwidgets_widget *type_label, *file_type;
     xxwidgets_widget *open, *extract, *test, *cancel, *quit;
-    xxwidgets_widget *copy_path, *info, *log_toggle, *advanced, *details, *options, *about_button, *formats_button;
+    xxwidgets_widget *copy_path, *info, *log_toggle, *advanced, *force, *details, *options, *about_button, *formats_button;
     xxwidgets_widget *members_label, *members, *metadata;
     xxwidgets_widget *progress, *status, *log_label, *log, *help;
     ui_job *job;
@@ -146,7 +147,7 @@ typedef struct ui_state {
     int archive_encrypted, encryption_smoke;
     unsigned encryption_notices;
     uint64_t progress_smoke_started;
-    int running, closing, smoke, exit_code, columns, rows, layout_ready, log_visible, busy, advanced_visible, options_requested, about_requested, formats_requested, browse_requested;
+    int running, closing, smoke, exit_code, columns, rows, layout_ready, log_visible, busy, advanced_visible, force_enabled, options_requested, about_requested, formats_requested, browse_requested;
     xxwidgets_widget *busy_focus; /* Control that started the running operation. */
     int window_columns, window_rows; /* Window size in cells last laid out for. */
 #ifdef _WIN32
@@ -1198,6 +1199,16 @@ static void change_advanced(ui_state *ui, int checked)
     }
 }
 
+/* Force only changes the next Extract (xfu_request.force / --force salvage); it
+ * needs no relayout, just the remembered flag and the saved setting. */
+static void change_force(ui_state *ui, int checked)
+{
+    ui->force_enabled = checked;
+    xxwidgets_widget_set_value(ui->force, checked);
+    if (xxwidgets_settings_set_bool(ui->settings, UI_SETTING_FORCE, checked) != XXWIDGETS_OK)
+        show_status(ui, "Cannot save the Force setting.");
+}
+
 /* Handle names are case-insensitive; punctuation separates words only.
  * Thus TAR_GZ and tar.gz name the same unpack operation. Numeric IDs must
  * belong to the unpack-handle catalog, never the file-inspection enum. */
@@ -1621,6 +1632,8 @@ static int start_job(ui_state *ui, xfu_command command)
             show_status(ui, "Cannot clear the archive listing."); job_destroy(job); return 0;
         }
     }
+    /* Salvage damaged member streams on Extract when the Force box is ticked. */
+    job->request.force = command == XFU_COMMAND_EXTRACT && ui->force_enabled != 0;
     if (command == XFU_COMMAND_EXTRACT && ui->pending_extract_selected) {
         size_t count = 0, i;
         ui->pending_extract_selected = 0;
@@ -2399,6 +2412,7 @@ static void layout(ui_state *ui, int columns, int rows)
             rect(ui->type_label, 52, 1, 10, 1);
             rect(ui->file_type, 62, 1, type_width, 1);
             rect(ui->advanced, 63 + type_width, 1, 16, 1);
+            rect(ui->force, 52, 2, 18, 1);
         }
         rect(ui->password_label, 1, 3, 21, 1);
         rect(ui->password, 22, 3, columns - 41, 1);
@@ -2447,6 +2461,7 @@ static void layout(ui_state *ui, int columns, int rows)
     rect(ui->test, 27, 3, 10, 1);
     rect(ui->cancel, 38, 3, 10, 1);
     rect(ui->quit, 49, 3, 10, 1);
+    rect(ui->force, columns - 17, 3, 16, 1);
     rect(ui->advanced, columns - 17, 5, 16, 1);
     rect(ui->options, columns - 30, 5, 12, 1);
     rect(ui->about_button, columns - 41, 5, 10, 1);
@@ -2617,6 +2632,11 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         int checked = 0;
         if (xxwidgets_widget_get_value(ui->advanced, &checked) != XXWIDGETS_OK) return;
         change_advanced(ui, checked);
+    } else if (event->widget == ui->force &&
+               (event->type == XXWIDGETS_EVENT_CHANGE || event->type == XXWIDGETS_EVENT_CLICK)) {
+        int checked = 0;
+        if (xxwidgets_widget_get_value(ui->force, &checked) != XXWIDGETS_OK) return;
+        change_force(ui, checked);
     } else if (event->type == XXWIDGETS_EVENT_CLICK && event->widget == ui->options) {
         ui->options_requested = 1;
     } else if (event->type == XXWIDGETS_EVENT_CLICK && event->widget == ui->about_button) {
@@ -2948,6 +2968,7 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
     CONTROL(about_button, XXWIDGETS_BUTTON, "About...");
     CONTROL(options, XXWIDGETS_BUTTON, "Options...");
     CONTROL(advanced, XXWIDGETS_CHECKBOX, "Advanced");
+    CONTROL(force, XXWIDGETS_CHECKBOX, "Force");
     CONTROL(members, ui->backend == XXWIDGETS_BACKEND_NATIVE ? XXWIDGETS_ARCHIVEBROWSER : XXWIDGETS_ARCHIVEVIEW, "");
     CONTROL(metadata, XXWIDGETS_LABEL, "No member selected.");
     CONTROL(details, XXWIDGETS_LISTBOX, "");
@@ -2978,6 +2999,7 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
         if (!populate_file_types(ui, &initial)) return 0;
     }
     if (xxwidgets_widget_set_value(ui->advanced, ui->advanced_visible) != XXWIDGETS_OK) return 0;
+    if (xxwidgets_widget_set_value(ui->force, ui->force_enabled) != XXWIDGETS_OK) return 0;
     if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER &&
         xxwidgets_archivebrowser_set_advanced(ui->members, ui->advanced_visible) != XXWIDGETS_OK) return 0;
     layout(ui, bounds.width, bounds.height);
@@ -3943,6 +3965,9 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
     }
     ui.advanced_visible = xxwidgets_settings_get_bool(ui.settings, UI_SETTING_ADVANCED, 0);
     ui.log_visible = xxwidgets_settings_get_bool(ui.settings, UI_SETTING_LOG, 0);
+    /* Force (salvage on Extract) defaults on, so a damaged member keeps what
+     * decoded rather than being dropped unless the user unticks it. */
+    ui.force_enabled = xxwidgets_settings_get_bool(ui.settings, UI_SETTING_FORCE, 1);
     if (!create_ui(&ui, archive, output)) {
         if (!ui.smoke) report(backend, "Cannot open the interface. Run the terminal edition in an interactive terminal.", 1);
         ui.exit_code = 2; goto cleanup;
