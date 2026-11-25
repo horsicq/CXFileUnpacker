@@ -72,7 +72,7 @@ typedef struct ui_job {
     int smoke_progress_delay, smoke_progress_paused, smoke_progress_shown;
     char *logs[UI_PENDING_LOGS];
     size_t log_first, log_count;
-    size_t logs_dropped; /* Pending lines pushed out before the UI took them. */
+    size_t logs_dropped;      /* Pending lines pushed out before the UI took them. */
     uint64_t logs_drained_at; /* progress_clock() of the last drain in the dialog loop. */
     uint64_t completed, total;
     char *current_name;
@@ -133,11 +133,11 @@ typedef struct ui_state {
     xx_unpack_handle_t selected_type;
     xx_unpack_handle_t startup_handle;
     int startup_handle_pending;
-    size_t file_type_count; /* Entries in the Unpack list. */
+    size_t file_type_count;            /* Entries in the Unpack list. */
     xx_unpack_handle_t *offered_types; /* Dynamically sized unpack-handle list. */
-    int type_chosen; /* selected_type was picked from the list for file_types_path. */
-    int selected_not_archive; /* The last run read file_types_path as selected_type: no archive. */
-    xx_unpack_handle_t members_type; /* Type the members view was listed as. */
+    int type_chosen;                   /* selected_type was picked from the list for file_types_path. */
+    int selected_not_archive;          /* The last run read file_types_path as selected_type: no archive. */
+    xx_unpack_handle_t members_type;   /* Type the members view was listed as. */
     xfu_command pending_command;
     int pending_extract_selected;
     int type_smoke, type_smoke_stage;
@@ -147,8 +147,9 @@ typedef struct ui_state {
     int archive_encrypted, encryption_smoke;
     unsigned encryption_notices;
     uint64_t progress_smoke_started;
-    int running, closing, smoke, exit_code, columns, rows, layout_ready, log_visible, busy, advanced_visible, force_enabled, options_requested, about_requested, formats_requested, browse_requested;
-    xxwidgets_widget *busy_focus; /* Control that started the running operation. */
+    int running, closing, smoke, exit_code, columns, rows, layout_ready, log_visible, busy, advanced_visible, force_enabled, options_requested, about_requested,
+        formats_requested, browse_requested;
+    xxwidgets_widget *busy_focus;    /* Control that started the running operation. */
     int window_columns, window_rows; /* Window size in cells last laid out for. */
 #ifdef _WIN32
     int cell_width, cell_height;
@@ -158,7 +159,8 @@ typedef struct ui_state {
 #endif
 } ui_state;
 
-static inline bool handle_equal(xx_unpack_handle_t a, xx_unpack_handle_t b) {
+static inline bool handle_equal(xx_unpack_handle_t a, xx_unpack_handle_t b)
+{
     return a.type == b.type && a.carrier == b.carrier;
 }
 
@@ -180,11 +182,17 @@ static void encryption_smoke_trace(const char *format, ...)
     char message[512];
     const char *path = getenv("XFU_ENCRYPTION_SMOKE_LOG");
     va_list arguments;
-    va_start(arguments, format); vsnprintf(message, sizeof(message), format, arguments); va_end(arguments);
-    fprintf(stderr, "Encryption UI smoke: %s\n", message); fflush(stderr);
+    va_start(arguments, format);
+    vsnprintf(message, sizeof(message), format, arguments);
+    va_end(arguments);
+    fprintf(stderr, "Encryption UI smoke: %s\n", message);
+    fflush(stderr);
     if (path && path[0]) {
         FILE *file = fopen(path, "ab");
-        if (file) { fprintf(file, "%s\n", message); fclose(file); }
+        if (file) {
+            fprintf(file, "%s\n", message);
+            fclose(file);
+        }
     }
 }
 
@@ -202,7 +210,10 @@ static uint64_t progress_clock(void)
 static int create_about(ui_state *ui)
 {
     if (xxwidgets_about_dialog_create(&ui->about) != XXWIDGETS_OK) return 0;
-#define ABOUT(field, text) do { if (xxwidgets_about_dialog_set_text(ui->about, field, text) != XXWIDGETS_OK) return 0; } while (0)
+#define ABOUT(field, text)                                                                     \
+    do {                                                                                       \
+        if (xxwidgets_about_dialog_set_text(ui->about, field, text) != XXWIDGETS_OK) return 0; \
+    } while (0)
     ABOUT(XXWIDGETS_ABOUT_TITLE, "About XFileUnpacker");
     ABOUT(XXWIDGETS_ABOUT_PROGRAM_NAME, "XFileUnpacker");
     ABOUT(XXWIDGETS_ABOUT_VERSION, "Version " XFILEUNPACKER_VERSION);
@@ -212,8 +223,7 @@ static int create_about(ui_state *ui)
     ABOUT(XXWIDGETS_ABOUT_LICENSE, "MIT License");
     ABOUT(XXWIDGETS_ABOUT_CREDITS, "Built with xxwidgets and xxfclib.\nSee the distributed licenses for third-party components.");
 #undef ABOUT
-    return xxwidgets_about_dialog_set_image(ui->about, xfu_icon_rgba, XFU_ICON_WIDTH,
-        XFU_ICON_HEIGHT, XFU_ICON_WIDTH * 4) == XXWIDGETS_OK;
+    return xxwidgets_about_dialog_set_image(ui->about, xfu_icon_rgba, XFU_ICON_WIDTH, XFU_ICON_HEIGHT, XFU_ICON_WIDTH * 4) == XXWIDGETS_OK;
 }
 
 static int desktop_shell(const ui_state *ui)
@@ -256,20 +266,16 @@ static void free_password(char *text)
  * hidden_selector's. As cli.c's. */
 static int format_control(const unsigned char *input, size_t count)
 {
-    static const unsigned long ranges[][2] = {
-        {0x00AD, 0x00AD}, {0x034F, 0x034F}, {0x0600, 0x0605}, {0x061C, 0x061C},
-        {0x06DD, 0x06DD}, {0x070F, 0x070F}, {0x0890, 0x0891}, {0x08E2, 0x08E2},
-        {0x115F, 0x1160}, {0x17B4, 0x17B5}, {0x180E, 0x180E}, {0x200B, 0x200B},
-        {0x200E, 0x200F}, {0x2028, 0x202E}, {0x2060, 0x206F}, {0x3164, 0x3164},
-        {0xFEFF, 0xFEFF}, {0xFFA0, 0xFFA0}, {0xFFF0, 0xFFFB}, {0x110BD, 0x110BD},
-        {0x110CD, 0x110CD}, {0x13430, 0x1343F}, {0x1BCA0, 0x1BCA3}, {0x1D173, 0x1D17A},
-        {0xE0000, 0xE00FF}, {0xE01F0, 0xE0FFF}};
+    static const unsigned long ranges[][2] = {{0x00AD, 0x00AD},   {0x034F, 0x034F},   {0x0600, 0x0605},   {0x061C, 0x061C},   {0x06DD, 0x06DD},   {0x070F, 0x070F},
+                                              {0x0890, 0x0891},   {0x08E2, 0x08E2},   {0x115F, 0x1160},   {0x17B4, 0x17B5},   {0x180E, 0x180E},   {0x200B, 0x200B},
+                                              {0x200E, 0x200F},   {0x2028, 0x202E},   {0x2060, 0x206F},   {0x3164, 0x3164},   {0xFEFF, 0xFEFF},   {0xFFA0, 0xFFA0},
+                                              {0xFFF0, 0xFFFB},   {0x110BD, 0x110BD}, {0x110CD, 0x110CD}, {0x13430, 0x1343F}, {0x1BCA0, 0x1BCA3}, {0x1D173, 0x1D17A},
+                                              {0xE0000, 0xE00FF}, {0xE01F0, 0xE0FFF}};
     unsigned long c;
     size_t i;
     if (count == 2) c = (unsigned long)(input[0] & 0x1f) << 6 | (input[1] & 0x3f);
     else if (count == 3) c = (unsigned long)(input[0] & 0x0f) << 12 | (unsigned long)(input[1] & 0x3f) << 6 | (input[2] & 0x3f);
-    else if (count == 4) c = (unsigned long)(input[0] & 0x07) << 18 | (unsigned long)(input[1] & 0x3f) << 12 |
-                             (unsigned long)(input[2] & 0x3f) << 6 | (input[3] & 0x3f);
+    else if (count == 4) c = (unsigned long)(input[0] & 0x07) << 18 | (unsigned long)(input[1] & 0x3f) << 12 | (unsigned long)(input[2] & 0x3f) << 6 | (input[3] & 0x3f);
     else return 0;
     for (i = 0; i < sizeof(ranges) / sizeof(ranges[0]); ++i)
         if (c >= ranges[i][0] && c <= ranges[i][1]) return 1;
@@ -281,8 +287,7 @@ static unsigned long code_point(const unsigned char *input, size_t count)
 {
     if (count == 2) return (unsigned long)(input[0] & 0x1f) << 6 | (input[1] & 0x3f);
     if (count == 3) return (unsigned long)(input[0] & 0x0f) << 12 | (unsigned long)(input[1] & 0x3f) << 6 | (input[2] & 0x3f);
-    if (count == 4) return (unsigned long)(input[0] & 0x07) << 18 | (unsigned long)(input[1] & 0x3f) << 12 |
-                           (unsigned long)(input[2] & 0x3f) << 6 | (input[3] & 0x3f);
+    if (count == 4) return (unsigned long)(input[0] & 0x07) << 18 | (unsigned long)(input[1] & 0x3f) << 12 | (unsigned long)(input[2] & 0x3f) << 6 | (input[3] & 0x3f);
     return input[0];
 }
 
@@ -296,22 +301,17 @@ static unsigned long code_point(const unsigned char *input, size_t count)
  * after a Mongolian letter. As cli.c's. */
 static int hidden_selector(unsigned long previous, const unsigned char *input, size_t count, size_t remaining)
 {
-    static const unsigned long emoji[][2] = {
-        {0x00A9, 0x00A9}, {0x00AE, 0x00AE}, {0x203C, 0x203C}, {0x2049, 0x2049},
-        {0x2122, 0x2122}, {0x2139, 0x2139}, {0x2194, 0x2199}, {0x21A9, 0x21AA},
-        {0x231A, 0x231B}, {0x2328, 0x2328}, {0x23CF, 0x23CF}, {0x23E9, 0x23FA},
-        {0x24C2, 0x24C2}, {0x25AA, 0x25AB}, {0x25B6, 0x25B6}, {0x25C0, 0x25C0},
-        {0x25FB, 0x25FE}, {0x2600, 0x27BF}, {0x2934, 0x2935}, {0x2B05, 0x2B07},
-        {0x2B1B, 0x2B1C}, {0x2B50, 0x2B50}, {0x2B55, 0x2B55}, {0x3030, 0x3030},
-        {0x303D, 0x303D}, {0x3297, 0x3297}, {0x3299, 0x3299}, {0x1F000, 0x1FAFF}};
-    static const unsigned long ideographs[][2] = {
-        {0x3400, 0x4DBF}, {0x4E00, 0x9FFF}, {0xF900, 0xFAFF}, {0x20000, 0x3FFFF}};
+    static const unsigned long emoji[][2] = {{0x00A9, 0x00A9}, {0x00AE, 0x00AE}, {0x203C, 0x203C}, {0x2049, 0x2049},  {0x2122, 0x2122}, {0x2139, 0x2139},
+                                             {0x2194, 0x2199}, {0x21A9, 0x21AA}, {0x231A, 0x231B}, {0x2328, 0x2328},  {0x23CF, 0x23CF}, {0x23E9, 0x23FA},
+                                             {0x24C2, 0x24C2}, {0x25AA, 0x25AB}, {0x25B6, 0x25B6}, {0x25C0, 0x25C0},  {0x25FB, 0x25FE}, {0x2600, 0x27BF},
+                                             {0x2934, 0x2935}, {0x2B05, 0x2B07}, {0x2B1B, 0x2B1C}, {0x2B50, 0x2B50},  {0x2B55, 0x2B55}, {0x3030, 0x3030},
+                                             {0x303D, 0x303D}, {0x3297, 0x3297}, {0x3299, 0x3299}, {0x1F000, 0x1FAFF}};
+    static const unsigned long ideographs[][2] = {{0x3400, 0x4DBF}, {0x4E00, 0x9FFF}, {0xF900, 0xFAFF}, {0x20000, 0x3FFFF}};
     unsigned long c = count >= 3 ? code_point(input, count) : 0;
     size_t i;
     if ((c >= 0x180B && c <= 0x180D) || c == 0x180F) return previous < 0x1820 || previous > 0x18AA;
     if (c == 0xFE0E || c == 0xFE0F) {
-        if ((previous >= '0' && previous <= '9') || previous == '#' || previous == '*')
-            return remaining < 6 || input[3] != 0xe2 || input[4] != 0x83 || input[5] != 0xa3;
+        if ((previous >= '0' && previous <= '9') || previous == '#' || previous == '*') return remaining < 6 || input[3] != 0xe2 || input[4] != 0x83 || input[5] != 0xa3;
         for (i = 0; i < sizeof(emoji) / sizeof(emoji[0]); ++i)
             if (previous >= emoji[i][0] && previous <= emoji[i][1]) return 0;
         return 1;
@@ -348,11 +348,9 @@ static char *display_text_impl(const char *text, int member_path)
             if ((input[i] & 0xc0) != 0x80) count = 0;
         /* Overlong forms, surrogates, beyond U+10FFFF, and the C1 controls
          * (U+0080-009F), which a terminal would act on. */
-        if (count > 1 && ((input[0] == 0xc2 && input[1] < 0xa0) ||
-            (input[0] == 0xe0 && input[1] < 0xa0) ||
-            (input[0] == 0xed && input[1] >= 0xa0) ||
-            (input[0] == 0xf0 && input[1] < 0x90) ||
-            (input[0] == 0xf4 && input[1] >= 0x90))) count = 0;
+        if (count > 1 && ((input[0] == 0xc2 && input[1] < 0xa0) || (input[0] == 0xe0 && input[1] < 0xa0) || (input[0] == 0xed && input[1] >= 0xa0) ||
+                          (input[0] == 0xf0 && input[1] < 0x90) || (input[0] == 0xf4 && input[1] >= 0x90)))
+            count = 0;
         /* Format controls and hidden variation selectors are escaped, each
          * of their bytes like a control's. */
         if (format_control(input, count) || hidden_selector(previous, input, count, remaining)) count = 0;
@@ -360,7 +358,9 @@ static char *display_text_impl(const char *text, int member_path)
             if (member_path == 2 && input[0] == '\\') result[position++] = '\\';
             previous = code_point(input, count);
             memcpy(result + position, input, count);
-            position += count; input += count; remaining -= count;
+            position += count;
+            input += count;
+            remaining -= count;
         } else {
             if (member_path == 1) {
                 /* Backslash escapes would become archive folder separators. */
@@ -369,12 +369,14 @@ static char *display_text_impl(const char *text, int member_path)
                 result[position++] = hex[input[0] & 15];
                 result[position++] = ']';
             } else {
-                result[position++] = '\\'; result[position++] = 'x';
+                result[position++] = '\\';
+                result[position++] = 'x';
                 result[position++] = hex[input[0] >> 4];
                 result[position++] = hex[input[0] & 15];
             }
             previous = 0;
-            ++input; --remaining;
+            ++input;
+            --remaining;
         }
     }
     result[position] = '\0';
@@ -387,13 +389,11 @@ static int utf8_text(const char *text)
 {
     const unsigned char *p = (const unsigned char *)text;
     while (*p) {
-        size_t count = *p < 0x80 ? 1 : *p >= 0xc2 && *p <= 0xdf ? 2 :
-            *p >= 0xe0 && *p <= 0xef ? 3 : *p >= 0xf0 && *p <= 0xf4 ? 4 : 0, i;
+        size_t count = *p < 0x80 ? 1 : *p >= 0xc2 && *p <= 0xdf ? 2 : *p >= 0xe0 && *p <= 0xef ? 3 : *p >= 0xf0 && *p <= 0xf4 ? 4 : 0, i;
         if (!count) return 0;
         for (i = 1; i < count; ++i)
             if ((p[i] & 0xc0) != 0x80) return 0;
-        if (count > 1 && ((p[0] == 0xe0 && p[1] < 0xa0) || (p[0] == 0xed && p[1] >= 0xa0) ||
-            (p[0] == 0xf0 && p[1] < 0x90) || (p[0] == 0xf4 && p[1] >= 0x90))) return 0;
+        if (count > 1 && ((p[0] == 0xe0 && p[1] < 0xa0) || (p[0] == 0xed && p[1] >= 0xa0) || (p[0] == 0xf0 && p[1] < 0x90) || (p[0] == 0xf4 && p[1] >= 0x90))) return 0;
         p += count;
     }
     return 1;
@@ -487,33 +487,63 @@ static void job_entry(void *user, const xfu_entry *entry)
     size_t i;
     if (job->memory_error) return;
     name = display_member_text(entry->name);
-    if (!name) { job->memory_error = 1; return; }
+    if (!name) {
+        job->memory_error = 1;
+        return;
+    }
     /* Without it (out of memory) the note names the member view's form. */
-    if (!job->unsafe_name && !browsable_path(entry->name, entry->is_directory))
-        job->unsafe_name = display_text(entry->name);
+    if (!job->unsafe_name && !browsable_path(entry->name, entry->is_directory)) job->unsafe_name = display_text(entry->name);
     if (entry->embedded_password) {
         password = copy_text(entry->embedded_password);
-        if (!password) { free(name); job->memory_error = 1; return; }
+        if (!password) {
+            free(name);
+            job->memory_error = 1;
+            return;
+        }
     }
     if (entry->property_count) {
-        if (entry->property_count > SIZE_MAX / sizeof(*properties)) { free_password(password); free(name); job->memory_error = 1; return; }
+        if (entry->property_count > SIZE_MAX / sizeof(*properties)) {
+            free_password(password);
+            free(name);
+            job->memory_error = 1;
+            return;
+        }
         properties = (xfu_property *)calloc(entry->property_count, sizeof(*properties));
-        if (!properties) { free_password(password); free(name); job->memory_error = 1; return; }
+        if (!properties) {
+            free_password(password);
+            free(name);
+            job->memory_error = 1;
+            return;
+        }
         for (i = 0; i < entry->property_count; ++i) {
             properties[i].name = display_member_text(entry->properties[i].name);
             properties[i].value = display_text(entry->properties[i].value);
             if (!properties[i].name || !properties[i].value) {
-                xfu_free_properties(properties, entry->property_count); free_password(password); free(name); job->memory_error = 1; return;
+                xfu_free_properties(properties, entry->property_count);
+                free_password(password);
+                free(name);
+                job->memory_error = 1;
+                return;
             }
         }
     }
     if (job->entry_count == job->entry_capacity) {
         capacity = job->entry_capacity ? job->entry_capacity * 2 : 128;
         if (capacity > SIZE_MAX / sizeof(*grown)) {
-            xfu_free_properties(properties, entry->property_count); free_password(password); free(name); job->memory_error = 1; return;
+            xfu_free_properties(properties, entry->property_count);
+            free_password(password);
+            free(name);
+            job->memory_error = 1;
+            return;
         }
         grown = (xfu_entry *)realloc(job->entries, capacity * sizeof(*grown));
-        if (!grown) { xfu_free_properties(properties, entry->property_count); free_password(password); free(name); job->memory_error = 1; return; }
+        if (!grown) {
+            xfu_free_properties(properties, entry->property_count);
+            free_password(password);
+            free(name);
+            job->memory_error = 1;
+            return;
+        }
         job->entries = grown;
         job->entry_capacity = capacity;
     }
@@ -535,8 +565,7 @@ static void job_progress(void *user, uint64_t completed, uint64_t total, const c
         xx_pd_record *record = &job->worker_progress.records[job->overall_level];
         record->total = total;
         /* The end of a long name (the member) stays, cut at a whole character. */
-        if (name || !record->status[0])
-            xxwidgets_process_status_tail(record->status, sizeof(record->status), copy && copy[0] ? copy : "Archive members");
+        if (name || !record->status[0]) xxwidgets_process_status_tail(record->status, sizeof(record->status), copy && copy[0] ? copy : "Archive members");
         xx_pd_set_current(&job->worker_progress, job->overall_level, completed);
     }
     mutex_lock(&job->mutex);
@@ -560,13 +589,15 @@ static bool job_cancelled(void *user)
     return cancelled || job->memory_error;
 }
 
-static void job_unpack_handle_types(void *user, const xx_unpack_handle_t *types, size_t count,
-                                    xx_unpack_handle_t selected)
+static void job_unpack_handle_types(void *user, const xx_unpack_handle_t *types, size_t count, xx_unpack_handle_t selected)
 {
     ui_job *job = (ui_job *)user;
     xx_unpack_handle_t *copy = NULL;
     if (count > INT_MAX || count > SIZE_MAX / sizeof(*copy) || (count && !types)) {
-        mutex_lock(&job->mutex); job->memory_error = 1; mutex_unlock(&job->mutex); return;
+        mutex_lock(&job->mutex);
+        job->memory_error = 1;
+        mutex_unlock(&job->mutex);
+        return;
     }
     if (count) {
         copy = (xx_unpack_handle_t *)malloc(count * sizeof(*copy));
@@ -575,7 +606,8 @@ static void job_unpack_handle_types(void *user, const xx_unpack_handle_t *types,
     mutex_lock(&job->mutex);
     if (count && !copy) job->memory_error = 1;
     else {
-        free(job->file_types); job->file_types = copy;
+        free(job->file_types);
+        job->file_types = copy;
         job->type_count = count;
         job->selected_type = selected;
         job->have_file_types = 1;
@@ -603,8 +635,7 @@ static void job_encryption(void *user, xfu_encryption_status status, const char 
     (void)member_name; /* One archive notice; no borrowed member string retained. */
     mutex_lock(&job->mutex);
     job->encryption_detected = 1;
-    if (status == XFU_ENCRYPTION_PASSWORD_REQUIRED || status == XFU_ENCRYPTION_PASSWORD_REJECTED)
-        job->encryption_blocked = status;
+    if (status == XFU_ENCRYPTION_PASSWORD_REQUIRED || status == XFU_ENCRYPTION_PASSWORD_REJECTED) job->encryption_blocked = status;
     mutex_unlock(&job->mutex);
 }
 
@@ -658,8 +689,7 @@ static void drain_logs(ui_state *ui, ui_job *job)
     size_t i, count, dropped;
     mutex_lock(&job->mutex);
     count = job->log_count;
-    for (i = 0; i < count; ++i)
-        lines[i] = job->logs[(job->log_first + i) % UI_PENDING_LOGS];
+    for (i = 0; i < count; ++i) lines[i] = job->logs[(job->log_first + i) % UI_PENDING_LOGS];
     job->log_first = job->log_count = 0;
     dropped = job->logs_dropped;
     job->logs_dropped = 0;
@@ -669,7 +699,10 @@ static void drain_logs(ui_state *ui, ui_job *job)
         snprintf(notice, sizeof(notice), "%zu log line(s) not shown (logged faster than displayed).", dropped);
         append_log_line(ui, notice);
     }
-    for (i = 0; i < count; ++i) { append_log_line(ui, lines[i]); free(lines[i]); }
+    for (i = 0; i < count; ++i) {
+        append_log_line(ui, lines[i]);
+        free(lines[i]);
+    }
     /* The newest line selected once, not after every line. */
     if (dropped || count) xxwidgets_widget_set_value(ui->log, (int)xxwidgets_listbox_count(ui->log) - 1);
 }
@@ -685,8 +718,10 @@ static void show_detected_types(ui_state *ui, ui_job *job)
     published = job->types_published;
     if (published && job->type_count) {
         detected.file_types = (xx_unpack_handle_t *)malloc(job->type_count * sizeof(*detected.file_types));
-        if (!detected.file_types) { job->memory_error = 1; published = 0; }
-        else memcpy(detected.file_types, job->file_types, job->type_count * sizeof(*detected.file_types));
+        if (!detected.file_types) {
+            job->memory_error = 1;
+            published = 0;
+        } else memcpy(detected.file_types, job->file_types, job->type_count * sizeof(*detected.file_types));
     }
     if (published) {
         detected.type_count = job->type_count;
@@ -699,14 +734,15 @@ static void show_detected_types(ui_state *ui, ui_job *job)
         detected.request.handle = job->request.handle;
         keep_offered_types(ui, &detected);
         if (detected.memory_error || !populate_file_types(ui, &detected)) {
-            mutex_lock(&job->mutex); job->memory_error = 1; mutex_unlock(&job->mutex);
+            mutex_lock(&job->mutex);
+            job->memory_error = 1;
+            mutex_unlock(&job->mutex);
         }
     }
     free(detected.file_types);
 }
 
-static xxwidgets_status job_dialog_update(void *user, int stop,
-    xx_pd_struct *progress, int *finished)
+static xxwidgets_status job_dialog_update(void *user, int stop, xx_pd_struct *progress, int *finished)
 {
     ui_state *ui = (ui_state *)user;
     ui_job *job = ui->job;
@@ -788,8 +824,7 @@ static void job_destroy(ui_job *job)
     free(job->current_name);
     free(job->status_name);
     free(job->unsafe_name);
-    for (i = 0; i < job->log_count; ++i)
-        free(job->logs[(job->log_first + i) % UI_PENDING_LOGS]);
+    for (i = 0; i < job->log_count; ++i) free(job->logs[(job->log_first + i) % UI_PENDING_LOGS]);
     free_entries(job->entries, job->entry_count);
     mutex_destroy(&job->mutex);
     free(job);
@@ -803,7 +838,8 @@ static char *widget_text(xxwidgets_widget *widget)
     if (status != XXWIDGETS_OK && status != XXWIDGETS_BUFFER_TOO_SMALL) return NULL;
     result = (char *)malloc(size);
     if (result && xxwidgets_widget_get_text(widget, result, size, NULL) != XXWIDGETS_OK) {
-        free(result); result = NULL;
+        free(result);
+        result = NULL;
     }
     return result;
 }
@@ -811,7 +847,10 @@ static char *widget_text(xxwidgets_widget *widget)
 static void show_status(ui_state *ui, const char *message)
 {
     char *marked;
-    if (!ui->archive_encrypted) { xxwidgets_widget_set_text(ui->status, message); return; }
+    if (!ui->archive_encrypted) {
+        xxwidgets_widget_set_text(ui->status, message);
+        return;
+    }
     marked = (char *)malloc(strlen(message) + 13);
     if (!marked) return;
     sprintf(marked, "[Encrypted] %s", message);
@@ -830,14 +869,13 @@ static void set_encryption_marker(ui_state *ui, int encrypted)
  * started implicitly and hundreds of encrypted members produce one notice. */
 static int show_encryption_notice(ui_state *ui, xfu_encryption_status status)
 {
-    const char *message = status == XFU_ENCRYPTION_PASSWORD_REJECTED ?
-        "This archive contains encrypted files. The supplied password could not unlock the archive or selected files.\n\n"
-        "Check the password in the Password field, then try again. Damaged encrypted data can also cause this failure." :
-        status == XFU_ENCRYPTION_PASSWORD_REQUIRED ?
-        "This archive is encrypted. A password is required to open the archive or selected files.\n\n"
-        "Enter the password in the Password field, then try the operation again." :
-        "Files in this archive are encrypted.\n\n"
-        "Enter a password in the Password field before testing or extracting them.";
+    const char *message = status == XFU_ENCRYPTION_PASSWORD_REJECTED
+                              ? "This archive contains encrypted files. The supplied password could not unlock the archive or selected files.\n\n"
+                                "Check the password in the Password field, then try again. Damaged encrypted data can also cause this failure."
+                          : status == XFU_ENCRYPTION_PASSWORD_REQUIRED ? "This archive is encrypted. A password is required to open the archive or selected files.\n\n"
+                                                                         "Enter the password in the Password field, then try the operation again."
+                                                                       : "Files in this archive are encrypted.\n\n"
+                                                                         "Enter a password in the Password field before testing or extracting them.";
     int okay = 1;
     if (ui->closing) return 1;
     if (ui->encryption_smoke) encryption_smoke_trace("opening notice status=%d native=%d job=%p busy=%d", (int)status, desktop_shell(ui), (void *)ui->job, ui->busy);
@@ -847,8 +885,7 @@ static int show_encryption_notice(ui_state *ui, xfu_encryption_status status)
         wchar_t wide[1024];
         if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, message, -1, wide, 1024)) okay = 0;
         else {
-            okay = MessageBoxW((HWND)xxwidgets_widget_native_handle(ui->window), wide,
-                L"Encrypted archive", MB_OK | MB_ICONINFORMATION) != 0;
+            okay = MessageBoxW((HWND)xxwidgets_widget_native_handle(ui->window), wide, L"Encrypted archive", MB_OK | MB_ICONINFORMATION) != 0;
         }
     } else
 #endif
@@ -884,15 +921,24 @@ static int set_automatic_password(ui_state *ui, const char *password)
     if (password) {
         raw = copy_text(password);
         display = password_display(password, &escaped);
-        if (!raw || !display) { free_password(raw); free_password(display); return 0; }
+        if (!raw || !display) {
+            free_password(raw);
+            free_password(display);
+            return 0;
+        }
     }
     ui->password_updating = 1;
     if (xxwidgets_widget_set_text(ui->password, display ? display : "") != XXWIDGETS_OK) {
-        ui->password_updating = 0; free_password(raw); free_password(display); return 0;
+        ui->password_updating = 0;
+        free_password(raw);
+        free_password(display);
+        return 0;
     }
     ui->password_updating = 0;
-    free_password(ui->automatic_password); free_password(ui->automatic_password_display);
-    ui->automatic_password = raw; ui->automatic_password_display = display;
+    free_password(ui->automatic_password);
+    free_password(ui->automatic_password_display);
+    ui->automatic_password = raw;
+    ui->automatic_password_display = display;
     xxwidgets_widget_set_text(ui->password_label, escaped ? "Password (escaped):" : "Password:");
     return 1;
 }
@@ -901,7 +947,8 @@ static void password_edited(ui_state *ui)
 {
     if (ui->password_updating) return;
     ui->password_manual = 1;
-    free_password(ui->automatic_password); free_password(ui->automatic_password_display);
+    free_password(ui->automatic_password);
+    free_password(ui->automatic_password_display);
     ui->automatic_password = ui->automatic_password_display = NULL;
     xxwidgets_widget_set_text(ui->password_label, "Password:");
 }
@@ -912,9 +959,14 @@ static int password_archive_changed(ui_state *ui, const char *archive)
     if (ui->password_archive && !strcmp(ui->password_archive, archive)) return 1;
     path = copy_text(archive);
     if (!path) return 0;
-    if (!set_automatic_password(ui, NULL)) { free(path); return 0; }
-    free(ui->password_archive); ui->password_archive = path;
-    free(ui->password_listed_archive); ui->password_listed_archive = NULL;
+    if (!set_automatic_password(ui, NULL)) {
+        free(path);
+        return 0;
+    }
+    free(ui->password_archive);
+    ui->password_archive = path;
+    free(ui->password_listed_archive);
+    ui->password_listed_archive = NULL;
     set_encryption_marker(ui, 0);
     show_status(ui, "Ready.");
     xxwidgets_widget_set_text(ui->metadata, "No member selected.");
@@ -927,21 +979,23 @@ static int password_snapshot(ui_state *ui, char **password)
     char *field = widget_text(ui->password);
     *password = NULL;
     if (!field) return 0;
-    if (ui->automatic_password && ui->automatic_password_display &&
-        !strcmp(field, ui->automatic_password_display)) {
+    if (ui->automatic_password && ui->automatic_password_display && !strcmp(field, ui->automatic_password_display)) {
         *password = copy_text(ui->automatic_password);
-        free_password(field); return *password != NULL;
+        free_password(field);
+        return *password != NULL;
     }
-    if (ui->password_manual || field[0]) { *password = field; return 1; }
-    free_password(field); return 1;
+    if (ui->password_manual || field[0]) {
+        *password = field;
+        return 1;
+    }
+    free_password(field);
+    return 1;
 }
 
 static void autofill_selected_password(ui_state *ui, size_t index)
 {
-    if (!(ui->job && ui->job->retrieve_password) && !ui->password_manual && index < ui->listed_count &&
-        ui->password_listed_archive && ui->password_archive &&
-        !strcmp(ui->password_listed_archive, ui->password_archive) &&
-        ui->listed_entries[index].embedded_password &&
+    if (!(ui->job && ui->job->retrieve_password) && !ui->password_manual && index < ui->listed_count && ui->password_listed_archive && ui->password_archive &&
+        !strcmp(ui->password_listed_archive, ui->password_archive) && ui->listed_entries[index].embedded_password &&
         !set_automatic_password(ui, ui->listed_entries[index].embedded_password))
         show_status(ui, "Cannot display the recovered password.");
 }
@@ -950,18 +1004,19 @@ static int autofill_listing_password(ui_state *ui, const ui_job *job)
 {
     char *path = NULL;
     size_t i;
-    if (job->result == 0 && ui->password_archive &&
-        !strcmp(ui->password_archive, job->archive_path)) {
+    if (job->result == 0 && ui->password_archive && !strcmp(ui->password_archive, job->archive_path)) {
         path = copy_text(job->archive_path);
         if (!path) return 0;
     }
-    free(ui->password_listed_archive); ui->password_listed_archive = path;
+    free(ui->password_listed_archive);
+    ui->password_listed_archive = path;
     if (job->retrieve_password) return 1;
     if (!ui->password_manual) {
         const char *first = NULL;
         for (i = 0; path && i < ui->listed_count; ++i)
             if (ui->listed_entries[i].embedded_password) {
-                first = ui->listed_entries[i].embedded_password; break;
+                first = ui->listed_entries[i].embedded_password;
+                break;
             }
         return set_automatic_password(ui, first);
     }
@@ -994,19 +1049,15 @@ static void set_busy(ui_state *ui, int busy)
 {
     /* About, Options and File types are modal: opened during an operation they
      * would stop its progress display and keep Cancel out of reach. */
-    xxwidgets_widget *controls[] = {
-        ui->archive_path, ui->archive_browse, ui->output_dir, ui->open,
-        ui->extract, ui->test, ui->password, ui->get_password,
-        ui->options, ui->about_button, ui->formats_button
-    };
+    xxwidgets_widget *controls[] = {ui->archive_path, ui->archive_browse, ui->output_dir, ui->open,         ui->extract,       ui->test,
+                                    ui->password,     ui->get_password,   ui->options,    ui->about_button, ui->formats_button};
     size_t i;
     int cancel_focused = 0;
     /* A backend moves focus off a control it disables. Cancel is enabled
      * first, so focus can land there and never fall through to Quit, where
      * the terminal UI's next Enter would end the program. */
     if (busy) xxwidgets_widget_set_enabled(ui->cancel, 1);
-    for (i = 0; i < sizeof(controls) / sizeof(controls[0]); ++i)
-        xxwidgets_widget_set_enabled(controls[i], !busy);
+    for (i = 0; i < sizeof(controls) / sizeof(controls[0]); ++i) xxwidgets_widget_set_enabled(controls[i], !busy);
     xxwidgets_widget_set_enabled(ui->file_type, !busy && ui->file_type_count != 0);
     xxwidgets_widget_set_enabled(ui->extract, !busy && archive_actions(ui));
     xxwidgets_widget_set_enabled(ui->test, !busy && archive_actions(ui));
@@ -1019,9 +1070,7 @@ static void set_busy(ui_state *ui, int busy)
          * control that started the operation, or the Archive field. Focus the
          * user moved elsewhere during the operation stays where it is. */
         if (busy) xxwidgets_widget_focus(ui->cancel);
-        else if (cancel_focused != 0 &&
-                 (!ui->busy_focus || xxwidgets_widget_focus(ui->busy_focus) != XXWIDGETS_OK))
-            xxwidgets_widget_focus(ui->archive_path);
+        else if (cancel_focused != 0 && (!ui->busy_focus || xxwidgets_widget_focus(ui->busy_focus) != XXWIDGETS_OK)) xxwidgets_widget_focus(ui->archive_path);
         if (!busy) ui->busy_focus = NULL;
     }
 #ifdef _WIN32
@@ -1034,10 +1083,10 @@ static void set_busy(ui_state *ui, int busy)
 static const char *command_name(xfu_command command)
 {
     switch (command) {
-    case XFU_COMMAND_LIST: return "Listing";
-    case XFU_COMMAND_EXTRACT: return "Extracting";
-    case XFU_COMMAND_TEST: return "Testing";
-    default: return "Working";
+        case XFU_COMMAND_LIST: return "Listing";
+        case XFU_COMMAND_EXTRACT: return "Extracting";
+        case XFU_COMMAND_TEST: return "Testing";
+        default: return "Working";
     }
 }
 
@@ -1053,7 +1102,8 @@ static void update_details(ui_state *ui, size_t index)
         char *line = (char *)malloc(length);
         if (!line) return;
         snprintf(line, length, "%s: %s", property->name, property->value);
-        xxwidgets_listbox_add(ui->details, line); free(line);
+        xxwidgets_listbox_add(ui->details, line);
+        free(line);
     }
 }
 
@@ -1090,17 +1140,15 @@ static void update_metadata(ui_state *ui)
         message = (char *)malloc(capacity);
         if (!message) return;
         snprintf(message, capacity, "%s%zu / %zu object(s) selected | %s | %s%s%s%s",
-            index < ui->listed_count && ui->listed_entries[index].is_encrypted ? "Encrypted | " : "",
-            selected_count, xxwidgets_archivebrowser_visible_count(ui->members), member.path,
-            member.is_directory ? "Folder" : "Size: ", member.is_directory ? "" : size,
-            member.is_directory ? "" : "; packed: ", member.is_directory ? "" : packed);
+                 index < ui->listed_count && ui->listed_entries[index].is_encrypted ? "Encrypted | " : "", selected_count,
+                 xxwidgets_archivebrowser_visible_count(ui->members), member.path, member.is_directory ? "Folder" : "Size: ", member.is_directory ? "" : size,
+                 member.is_directory ? "" : "; packed: ", member.is_directory ? "" : packed);
         xxwidgets_widget_set_text(ui->metadata, message);
         update_details(ui, index);
         free(message);
         return;
     }
-    if (xxwidgets_archiveview_get_selection(ui->members, &index, &entry) != XXWIDGETS_OK ||
-        index == SIZE_MAX) {
+    if (xxwidgets_archiveview_get_selection(ui->members, &index, &entry) != XXWIDGETS_OK || index == SIZE_MAX) {
         xxwidgets_widget_set_text(ui->metadata, "No member selected.");
         update_details(ui, SIZE_MAX);
         return;
@@ -1116,12 +1164,10 @@ static void update_metadata(ui_state *ui)
         else snprintf(packed, sizeof(packed), "%" PRId64, details->packed_size);
         if (details->unpacked_size < 0) strcpy(unpacked, "unknown");
         else snprintf(unpacked, sizeof(unpacked), "%" PRId64, details->unpacked_size);
-        snprintf(message, capacity, "%s%s | %s | packed: %s; size: %s bytes",
-                 details->is_encrypted ? "Encrypted | " : "", details->name,
+        snprintf(message, capacity, "%s%s | %s | packed: %s; size: %s bytes", details->is_encrypted ? "Encrypted | " : "", details->name,
                  details->is_directory ? "directory" : "file", packed, unpacked);
     } else {
-        snprintf(message, capacity, "%s | %s | %" PRIu64 " bytes", entry.path,
-                 entry.is_directory ? "directory" : "file", entry.size);
+        snprintf(message, capacity, "%s | %s | %" PRIu64 " bytes", entry.path, entry.is_directory ? "directory" : "file", entry.size);
     }
     xxwidgets_widget_set_text(ui->metadata, message);
     update_details(ui, index);
@@ -1130,14 +1176,15 @@ static void update_metadata(ui_state *ui)
 
 static int apply_advanced(ui_state *ui, int checked)
 {
-    if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER &&
-        xxwidgets_archivebrowser_set_advanced(ui->members, checked) != XXWIDGETS_OK) {
+    if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER && xxwidgets_archivebrowser_set_advanced(ui->members, checked) != XXWIDGETS_OK) {
         xxwidgets_widget_set_value(ui->advanced, ui->advanced_visible);
-        show_status(ui, "Cannot change metadata columns."); return 0;
+        show_status(ui, "Cannot change metadata columns.");
+        return 0;
     }
     ui->advanced_visible = checked;
     xxwidgets_widget_set_value(ui->advanced, checked);
-    layout(ui, ui->columns, ui->rows); update_metadata(ui);
+    layout(ui, ui->columns, ui->rows);
+    update_metadata(ui);
     return 1;
 }
 
@@ -1165,24 +1212,25 @@ static char *ui_supported_types_text(size_t *count)
 static void show_supported_types(ui_state *ui)
 {
     char *text = ui_supported_types_text(NULL);
-    if (!text) { show_status(ui, "Cannot allocate the supported file type list."); return; }
-    if (xxwidgets_text_dialog(ui->window, "Supported file types", text) != XXWIDGETS_OK)
-        show_status(ui, "Cannot show the supported file type dialog.");
+    if (!text) {
+        show_status(ui, "Cannot allocate the supported file type list.");
+        return;
+    }
+    if (xxwidgets_text_dialog(ui->window, "Supported file types", text) != XXWIDGETS_OK) show_status(ui, "Cannot show the supported file type dialog.");
     free(text);
 }
 
 static void show_options(ui_state *ui)
 {
-    const xxwidgets_setting_option options[] = {
-        {"Advanced archive metadata", UI_SETTING_ADVANCED, 0},
-        {"Show operation log", UI_SETTING_LOG, 0}
-    };
+    const xxwidgets_setting_option options[] = {{"Advanced archive metadata", UI_SETTING_ADVANCED, 0}, {"Show operation log", UI_SETTING_LOG, 0}};
     int accepted = 0;
     xxwidgets_status status;
     if (ui->job || ui->closing) return;
-    status = xxwidgets_settings_options_dialog(ui->window, "XFileUnpacker - Options", ui->settings, options,
-        desktop_shell(ui) ? 2 : 1, &accepted);
-    if (status != XXWIDGETS_OK) { show_status(ui, "Cannot open or save Options."); return; }
+    status = xxwidgets_settings_options_dialog(ui->window, "XFileUnpacker - Options", ui->settings, options, desktop_shell(ui) ? 2 : 1, &accepted);
+    if (status != XXWIDGETS_OK) {
+        show_status(ui, "Cannot open or save Options.");
+        return;
+    }
     if (accepted && apply_advanced(ui, xxwidgets_settings_get_bool(ui->settings, UI_SETTING_ADVANCED, 0))) {
         ui->log_visible = xxwidgets_settings_get_bool(ui->settings, UI_SETTING_LOG, 0);
         layout(ui, ui->columns, ui->rows);
@@ -1205,28 +1253,31 @@ static void change_force(ui_state *ui, int checked)
 {
     ui->force_enabled = checked;
     xxwidgets_widget_set_value(ui->force, checked);
-    if (xxwidgets_settings_set_bool(ui->settings, UI_SETTING_FORCE, checked) != XXWIDGETS_OK)
-        show_status(ui, "Cannot save the Force setting.");
+    if (xxwidgets_settings_set_bool(ui->settings, UI_SETTING_FORCE, checked) != XXWIDGETS_OK) show_status(ui, "Cannot save the Force setting.");
 }
 
 /* Handle names are case-insensitive; punctuation separates words only.
  * Thus TAR_GZ and tar.gz name the same unpack operation. Numeric IDs must
  * belong to the unpack-handle catalog, never the file-inspection enum. */
-static int handle_name_equal(const char *left, const char *right) {
+static int handle_name_equal(const char *left, const char *right)
+{
     for (;;) {
         unsigned char a, b;
         while (*left && !((*left >= '0' && *left <= '9') || (*left >= 'A' && *left <= 'Z') || (*left >= 'a' && *left <= 'z'))) ++left;
         while (*right && !((*right >= '0' && *right <= '9') || (*right >= 'A' && *right <= 'Z') || (*right >= 'a' && *right <= 'z'))) ++right;
-        a = (unsigned char)*left; b = (unsigned char)*right;
+        a = (unsigned char)*left;
+        b = (unsigned char)*right;
         if (a >= 'A' && a <= 'Z') a = (unsigned char)(a + 'a' - 'A');
         if (b >= 'A' && b <= 'Z') b = (unsigned char)(b + 'a' - 'A');
         if (a != b) return 0;
         if (!a) return 1;
-        ++left; ++right;
+        ++left;
+        ++right;
     }
 }
 
-static int parse_unpack_handle(const char *name, xx_unpack_handle_t *handle) {
+static int parse_unpack_handle(const char *name, xx_unpack_handle_t *handle)
+{
     xx_list_t *supported;
     size_t i;
     unsigned long numeric = 0;
@@ -1235,7 +1286,8 @@ static int parse_unpack_handle(const char *name, xx_unpack_handle_t *handle) {
     if (!name || !*name) return 0;
     if (strlen(name) >= 13) {
         char prefix[14];
-        memcpy(prefix, name, 13); prefix[13] = 0;
+        memcpy(prefix, name, 13);
+        prefix[13] = 0;
         if (handle_name_equal(prefix, "XX_FILE_TYPE_")) name += 13;
     }
     if (handle_name_equal(name, "auto") || handle_name_equal(name, "automatic")) {
@@ -1247,7 +1299,8 @@ static int parse_unpack_handle(const char *name, xx_unpack_handle_t *handle) {
     else if (handle_name_equal(name, "bzip2")) name = "bz2";
     else if (handle_name_equal(name, "tar.zst")) name = "tar.zstd";
     if (*name >= '0' && *name <= '9') {
-        errno = 0; numeric = strtoul(name, &end, 10);
+        errno = 0;
+        numeric = strtoul(name, &end, 10);
         /* 7ZIP is a name, not a malformed numeric ID. */
         if (!*end) {
             if (errno || numeric > UINT32_MAX) return 0;
@@ -1265,13 +1318,14 @@ static int parse_unpack_handle(const char *name, xx_unpack_handle_t *handle) {
         xx_unpack_handle_t candidate = *(const xx_unpack_handle_t *)xx_list_at(supported, i);
         if ((is_numeric && candidate.carrier == XX_UNPACK_CARRIER_NONE && numeric == (unsigned long)candidate.type) ||
             (!is_numeric && handle_name_equal(name, xx_format_unpack_handle_to_string(candidate)))) {
-            *handle = candidate; found = 1; break;
+            *handle = candidate;
+            found = 1;
+            break;
         }
     }
     xx_list_destroy(supported);
     return found;
 }
-
 
 static const char *unpack_handle_label(xx_unpack_handle_t type)
 {
@@ -1286,8 +1340,8 @@ static int populate_file_types(ui_state *ui, const ui_job *job)
     char *path = NULL;
     size_t i, selected = 0, displayed = job->type_count ? job->type_count : 1;
     int result = 0, found = 0;
-    if (displayed > INT_MAX || displayed > SIZE_MAX / sizeof(*records) ||
-        displayed > SIZE_MAX / sizeof(*labels) || job->type_count > SIZE_MAX / sizeof(*offered)) return 0;
+    if (displayed > INT_MAX || displayed > SIZE_MAX / sizeof(*records) || displayed > SIZE_MAX / sizeof(*labels) || job->type_count > SIZE_MAX / sizeof(*offered))
+        return 0;
     records = (xx_meta_string *)calloc(displayed, sizeof(*records));
     labels = (xx_str_w_s *)calloc(displayed, sizeof(*labels));
     path = copy_text(job->archive_path);
@@ -1303,25 +1357,38 @@ static int populate_file_types(ui_state *ui, const ui_job *job)
         labels[i].data = xx_str_utf8_to_unicode(label);
         if (!labels[i].data) goto done;
         labels[i].length = wcslen(labels[i].data);
-        labels[i].capacity = labels[i].length + 1; labels[i].is_view = true;
+        labels[i].capacity = labels[i].length + 1;
+        labels[i].is_view = true;
         records[i].meta_string = labels + i;
         records[i].var.type = XX_VAR_TYPE_UINT32;
         records[i].var.val.u32 = (uint32_t)type.type;
-        if (handle_equal(type, job->selected_type)) { selected = i; found = 1; }
+        if (handle_equal(type, job->selected_type)) {
+            selected = i;
+            found = 1;
+        }
     }
-    if (xxwidgets_combobox_set_records(ui->file_type, records, displayed) != XXWIDGETS_OK ||
-        xxwidgets_widget_set_value(ui->file_type, (int)selected) != XXWIDGETS_OK) goto done;
-    free(ui->file_types_path); ui->file_types_path = path; path = NULL;
+    if (xxwidgets_combobox_set_records(ui->file_type, records, displayed) != XXWIDGETS_OK || xxwidgets_widget_set_value(ui->file_type, (int)selected) != XXWIDGETS_OK)
+        goto done;
+    free(ui->file_types_path);
+    ui->file_types_path = path;
+    path = NULL;
     ui->selected_type = job->type_count ? job->file_types[selected] : (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
     ui->file_type_count = job->type_count;
-    free(ui->offered_types); ui->offered_types = offered; offered = NULL;
+    free(ui->offered_types);
+    ui->offered_types = offered;
+    offered = NULL;
     ui->selected_not_archive = 0;
     if (!job->type_count || !found) ui->type_chosen = 0;
     xxwidgets_widget_set_enabled(ui->file_type, !ui->busy && ui->file_type_count != 0);
     result = 1;
 done:
-    if (labels) for (i = 0; i < displayed; ++i) xx_str_wfree(labels[i].data);
-    free(records); free(labels); free(offered); free(path); return result;
+    if (labels)
+        for (i = 0; i < displayed; ++i) xx_str_wfree(labels[i].data);
+    free(records);
+    free(labels);
+    free(offered);
+    free(path);
+    return result;
 }
 
 /* Whether the archive browser can show a member path. It refuses a '..'
@@ -1357,7 +1424,11 @@ static int populate_members(ui_state *ui, ui_job *job)
         if (job->entry_count) {
             members = (xxwidgets_archive_browser_entry *)calloc(job->entry_count, sizeof(*members));
             sources = (size_t *)malloc(job->entry_count * sizeof(*sources));
-            if (!members || !sources) { free(members); free(sources); return 0; }
+            if (!members || !sources) {
+                free(members);
+                free(sources);
+                return 0;
+            }
         }
         for (i = 0; i < job->entry_count; ++i) {
             xxwidgets_archive_browser_entry *member = &members[shown];
@@ -1396,20 +1467,25 @@ static int populate_members(ui_state *ui, ui_job *job)
                         free((void *)members[j].properties);
                         if (job->entries[sources[j]].is_encrypted) free((void *)members[j].attributes);
                     }
-                    free(members); free(sources); free(note); return 0;
+                    free(members);
+                    free(sources);
+                    free(note);
+                    return 0;
                 }
                 snprintf(marked, length, "Encrypted%s%s", original[0] ? "; " : "", original);
             }
             if (job->entries[i].property_count) {
                 size_t j;
-                xxwidgets_archive_property *properties = (xxwidgets_archive_property *)calloc(
-                    job->entries[i].property_count, sizeof(*properties));
+                xxwidgets_archive_property *properties = (xxwidgets_archive_property *)calloc(job->entries[i].property_count, sizeof(*properties));
                 if (!properties) {
                     for (j = 0; j < shown; ++j) {
                         free((void *)members[j].properties);
                         if (job->entries[sources[j]].is_encrypted) free((void *)members[j].attributes);
                     }
-                    free(members); free(sources); free(note); return 0;
+                    free(members);
+                    free(sources);
+                    free(note);
+                    return 0;
                 }
                 member->properties = properties;
                 member->property_count = job->entries[i].property_count;
@@ -1425,9 +1501,14 @@ static int populate_members(ui_state *ui, ui_job *job)
             if (job->entries[sources[i]].is_encrypted) free((void *)members[i].attributes);
         }
         free(members);
-        if (status != XXWIDGETS_OK) { free(sources); free(note); return 0; }
+        if (status != XXWIDGETS_OK) {
+            free(sources);
+            free(note);
+            return 0;
+        }
         free(ui->browser_sources);
-        ui->browser_sources = hidden ? sources : NULL; ui->browser_count = shown;
+        ui->browser_sources = hidden ? sources : NULL;
+        ui->browser_count = shown;
         if (!hidden) free(sources);
         if (hidden) {
             char more[64];
@@ -1435,7 +1516,10 @@ static int populate_members(ui_state *ui, ui_job *job)
                 snprintf(more, sizeof(more), " (and %zu more)", hidden - 1);
                 if (note) {
                     char *grown = (char *)realloc(note, strlen(note) + strlen(more) + 1);
-                    if (grown) { note = grown; strcat(note, more); }
+                    if (grown) {
+                        note = grown;
+                        strcat(note, more);
+                    }
                 }
             }
             append_log(ui, note ? note : "Unsafe member paths are not shown in the folder view.");
@@ -1451,15 +1535,19 @@ static int populate_members(ui_state *ui, ui_job *job)
                 char *title = (char *)malloc(length);
                 if (title) {
                     snprintf(title, length, "%s - XFileUnpacker", shown);
-                    xxwidgets_widget_set_text(ui->window, title); free(title);
+                    xxwidgets_widget_set_text(ui->window, title);
+                    free(title);
                 }
             }
             free(shown);
         }
         free_entries(ui->listed_entries, ui->listed_count);
-        ui->listed_entries = job->entries; ui->listed_count = job->entry_count;
-        job->entries = NULL; job->entry_count = job->entry_capacity = 0;
-        free(ui->members_archive); ui->members_archive = copy_text(job->archive_path);
+        ui->listed_entries = job->entries;
+        ui->listed_count = job->entry_count;
+        job->entries = NULL;
+        job->entry_count = job->entry_capacity = 0;
+        free(ui->members_archive);
+        ui->members_archive = copy_text(job->archive_path);
         ui->members_type = job->have_file_types ? job->selected_type : job->request.handle;
         if (!autofill_listing_password(ui, job)) return 0;
         update_metadata(ui);
@@ -1471,8 +1559,7 @@ static int populate_members(ui_state *ui, ui_job *job)
     }
     for (i = 0; i < job->entry_count; ++i) {
         entries[i].path = job->entries[i].name;
-        entries[i].size = job->entries[i].unpacked_size >= 0 ?
-            (uint64_t)job->entries[i].unpacked_size : 0;
+        entries[i].size = job->entries[i].unpacked_size >= 0 ? (uint64_t)job->entries[i].unpacked_size : 0;
         entries[i].is_directory = job->entries[i].is_directory;
     }
     status = xxwidgets_archiveview_set_entries(ui->members, entries, job->entry_count);
@@ -1483,7 +1570,8 @@ static int populate_members(ui_state *ui, ui_job *job)
     ui->listed_count = job->entry_count;
     job->entries = NULL;
     job->entry_count = job->entry_capacity = 0;
-    free(ui->members_archive); ui->members_archive = copy_text(job->archive_path);
+    free(ui->members_archive);
+    ui->members_archive = copy_text(job->archive_path);
     ui->members_type = job->have_file_types ? job->selected_type : job->request.handle;
     if (!autofill_listing_password(ui, job)) return 0;
     update_metadata(ui);
@@ -1499,11 +1587,15 @@ static int clear_members(ui_state *ui)
         if (status == XXWIDGETS_OK) status = xxwidgets_archivebrowser_set_archive(ui->members, "");
     } else status = xxwidgets_archiveview_set_entries(ui->members, NULL, 0);
     if (status != XXWIDGETS_OK) return 0;
-    free(ui->browser_sources); ui->browser_sources = NULL; ui->browser_count = 0;
-    free(ui->members_archive); ui->members_archive = NULL;
+    free(ui->browser_sources);
+    ui->browser_sources = NULL;
+    ui->browser_count = 0;
+    free(ui->members_archive);
+    ui->members_archive = NULL;
     ui->members_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
     free_entries(ui->listed_entries, ui->listed_count);
-    ui->listed_entries = NULL; ui->listed_count = 0;
+    ui->listed_entries = NULL;
+    ui->listed_count = 0;
     update_metadata(ui);
     return 1;
 }
@@ -1542,15 +1634,26 @@ static int start_job(ui_state *ui, xfu_command command)
 #endif
     ui->pending_password_retrieval = 0;
     job = (ui_job *)calloc(1, sizeof(*job));
-    if (!job) { show_status(ui, "Out of memory."); return 0; }
-    if (!mutex_init(&job->mutex)) { free(job); show_status(ui, "Cannot initialize worker."); return 0; }
+    if (!job) {
+        show_status(ui, "Out of memory.");
+        return 0;
+    }
+    if (!mutex_init(&job->mutex)) {
+        free(job);
+        show_status(ui, "Cannot initialize worker.");
+        return 0;
+    }
     job->archive_path = widget_text(ui->archive_path);
     job->output_dir = widget_text(ui->output_dir);
     if (!job->archive_path || !job->output_dir) {
-        show_status(ui, "Out of memory."); job_destroy(job); return 0;
+        show_status(ui, "Out of memory.");
+        job_destroy(job);
+        return 0;
     }
     if (!job->archive_path[0]) {
-        show_status(ui, "Enter an archive path first."); job_destroy(job); return 0;
+        show_status(ui, "Enter an archive path first.");
+        job_destroy(job);
+        return 0;
     }
     job->retrieve_password = retrieve;
     job->retrieve_member = SIZE_MAX;
@@ -1567,12 +1670,16 @@ static int start_job(ui_state *ui, xfu_command command)
         if (source < ui->listed_count) {
             job->retrieve_member = source;
             job->retrieve_member_name = copy_text(ui->listed_entries[source].name);
-            if (!job->retrieve_member_name) { job_destroy(job); return 0; }
+            if (!job->retrieve_member_name) {
+                job_destroy(job);
+                return 0;
+            }
         }
     }
-    if (!password_archive_changed(ui, job->archive_path) ||
-        (!retrieve && ui->password_manual && !password_snapshot(ui, &job->password))) {
-        show_status(ui, "Cannot read the archive password."); job_destroy(job); return 0;
+    if (!password_archive_changed(ui, job->archive_path) || (!retrieve && ui->password_manual && !password_snapshot(ui, &job->password))) {
+        show_status(ui, "Cannot read the archive password.");
+        job_destroy(job);
+        return 0;
     }
     job->request.command = command;
     job->retrieve_revision = ui->password_archive_revision;
@@ -1584,20 +1691,25 @@ static int start_job(ui_state *ui, xfu_command command)
      * operation-wide override, including an explicitly empty password. */
     job->request.password = job->password;
     if (ui->password_smoke == 2 &&
-        (((ui->password_smoke_expected != NULL) != (ui->password_manual != 0)) ||
-         ((job->request.password == NULL) != (ui->password_smoke_expected == NULL)) ||
+        (((ui->password_smoke_expected != NULL) != (ui->password_manual != 0)) || ((job->request.password == NULL) != (ui->password_smoke_expected == NULL)) ||
          (job->request.password && strcmp(job->request.password, ui->password_smoke_expected)))) {
-        show_status(ui, "Password smoke: manual job value changed."); job_destroy(job); return 0;
+        show_status(ui, "Password smoke: manual job value changed.");
+        job_destroy(job);
+        return 0;
     }
-    if (retrieve && job->request.password) { job_destroy(job); return 0; }
-    if (ui->password_smoke == 1 &&
-        (ui->password_manual || job->password || job->request.password)) {
-        show_status(ui, "Password smoke: automatic value became a caller override."); job_destroy(job); return 0;
+    if (retrieve && job->request.password) {
+        job_destroy(job);
+        return 0;
     }
-    if (ui->password_smoke == 3 && command == XFU_COMMAND_TEST &&
-        (ui->password_manual || job->password || job->request.password)) {
+    if (ui->password_smoke == 1 && (ui->password_manual || job->password || job->request.password)) {
+        show_status(ui, "Password smoke: automatic value became a caller override.");
+        job_destroy(job);
+        return 0;
+    }
+    if (ui->password_smoke == 3 && command == XFU_COMMAND_TEST && (ui->password_manual || job->password || job->request.password)) {
         show_status(ui, "Password retrieval smoke: recovered value became a caller override.");
-        job_destroy(job); return 0;
+        job_destroy(job);
+        return 0;
     }
     job->request.callbacks.user = job;
     job->request.callbacks.log = job_log;
@@ -1615,21 +1727,29 @@ static int start_job(ui_state *ui, xfu_command command)
     job->smoke_progress_delay = ui->progress_smoke;
     known_file = ui->file_types_path && !strcmp(ui->file_types_path, job->archive_path);
     requested_type = ui->pending_type_path && !strcmp(ui->pending_type_path, job->archive_path);
-    free(ui->pending_type_path); ui->pending_type_path = NULL;
+    free(ui->pending_type_path);
+    ui->pending_type_path = NULL;
     /* Only a type the user picked is forced on the file. A detected one is
      * detected again: the file at that path may have changed since (a
      * finished download, another archive or a non-archive put there). */
-    if (requested_type || (known_file && ui->type_chosen))
-        job->request.handle = ui->selected_type;
-    else if (!known_file) { ui->selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE}; ui->type_chosen = 0; }
+    if (requested_type || (known_file && ui->type_chosen)) job->request.handle = ui->selected_type;
+    else if (!known_file) {
+        ui->selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
+        ui->type_chosen = 0;
+    }
     if (ui->selected_type.type == XX_FILE_TYPE_UNKNOWN) {
         ui_job initial = {0};
-        initial.archive_path = ""; initial.selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
+        initial.archive_path = "";
+        initial.selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
         if (!populate_file_types(ui, &initial)) {
-            show_status(ui, "Cannot reset the file type list."); job_destroy(job); return 0;
+            show_status(ui, "Cannot reset the file type list.");
+            job_destroy(job);
+            return 0;
         }
         if (!clear_members(ui)) {
-            show_status(ui, "Cannot clear the archive listing."); job_destroy(job); return 0;
+            show_status(ui, "Cannot clear the archive listing.");
+            job_destroy(job);
+            return 0;
         }
     }
     /* Salvage damaged member streams on Extract when the Force box is ticked. */
@@ -1637,14 +1757,16 @@ static int start_job(ui_state *ui, xfu_command command)
     if (command == XFU_COMMAND_EXTRACT && ui->pending_extract_selected) {
         size_t count = 0, i;
         ui->pending_extract_selected = 0;
-        if (xxwidgets_archivebrowser_selected_sources(ui->members, NULL, 0, &count) != XXWIDGETS_OK ||
-            !count || count > SIZE_MAX / sizeof(*job->selected_records)) {
-            show_status(ui, "Select at least one member to extract."); job_destroy(job); return 0;
+        if (xxwidgets_archivebrowser_selected_sources(ui->members, NULL, 0, &count) != XXWIDGETS_OK || !count || count > SIZE_MAX / sizeof(*job->selected_records)) {
+            show_status(ui, "Select at least one member to extract.");
+            job_destroy(job);
+            return 0;
         }
         job->selected_records = (size_t *)malloc(count * sizeof(*job->selected_records));
-        if (!job->selected_records ||
-            xxwidgets_archivebrowser_selected_sources(ui->members, job->selected_records, count, &count) != XXWIDGETS_OK) {
-            show_status(ui, "Cannot collect the selected members."); job_destroy(job); return 0;
+        if (!job->selected_records || xxwidgets_archivebrowser_selected_sources(ui->members, job->selected_records, count, &count) != XXWIDGETS_OK) {
+            show_status(ui, "Cannot collect the selected members.");
+            job_destroy(job);
+            return 0;
         }
         /* Ascending browser sources map to ascending listed records. */
         for (i = 0; i < count; ++i) job->selected_records[i] = browser_listed(ui, job->selected_records[i]);
@@ -1659,7 +1781,9 @@ static int start_job(ui_state *ui, xfu_command command)
 #else
     if (pthread_create(&job->thread, NULL, job_worker, job) != 0) {
 #endif
-        show_status(ui, "Cannot start archive worker."); job_destroy(job); return 0;
+        show_status(ui, "Cannot start archive worker.");
+        job_destroy(job);
+        return 0;
     }
     job->thread_started = 1;
     ui->job = job;
@@ -1682,16 +1806,15 @@ static int start_job(ui_state *ui, xfu_command command)
         if (status != XXWIDGETS_OK) {
             snprintf(message, sizeof(message), "Progress dialog: %s", xxwidgets_status_string(status));
             if (ui->progress_smoke) fprintf(stderr, "%s\n", message);
-            append_log(ui, message); job->result = 2;
+            append_log(ui, message);
+            job->result = 2;
         }
-        if (ui->progress_smoke &&
-            ((ui->progress_smoke == 1 && ui->progress_smoke_shown) ||
-             (ui->progress_smoke > 1 && ui->progress_smoke_shown != 1) ||
-             (ui->progress_smoke == 3 && (!ui->progress_smoke_cancelled || !snapshot.is_stop || job->result != 1)))) {
-            fprintf(stderr, "Threaded progress smoke: mode=%d shown=%d cancel=%d stopped=%d result=%d\n",
-                ui->progress_smoke, ui->progress_smoke_shown, ui->progress_smoke_cancelled,
-                snapshot.is_stop != 0, job->result);
-            append_log(ui, "Threaded progress smoke check failed."); job->result = 2;
+        if (ui->progress_smoke && ((ui->progress_smoke == 1 && ui->progress_smoke_shown) || (ui->progress_smoke > 1 && ui->progress_smoke_shown != 1) ||
+                                   (ui->progress_smoke == 3 && (!ui->progress_smoke_cancelled || !snapshot.is_stop || job->result != 1)))) {
+            fprintf(stderr, "Threaded progress smoke: mode=%d shown=%d cancel=%d stopped=%d result=%d\n", ui->progress_smoke, ui->progress_smoke_shown,
+                    ui->progress_smoke_cancelled, snapshot.is_stop != 0, job->result);
+            append_log(ui, "Threaded progress smoke check failed.");
+            job->result = 2;
         }
     }
     return 1;
@@ -1719,8 +1842,8 @@ static int same_member_path(const char *a, const char *b)
 
 static size_t member_rows(ui_state *ui)
 {
-    return xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER ?
-        xxwidgets_archivebrowser_visible_count(ui->members) : xxwidgets_archiveview_count(ui->members);
+    return xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER ? xxwidgets_archivebrowser_visible_count(ui->members)
+                                                                          : xxwidgets_archiveview_count(ui->members);
 }
 
 /* The path of a members row (a browser row in the folder shown, or an
@@ -1732,11 +1855,13 @@ static const char *member_row_path(ui_state *ui, size_t row, int *is_directory)
         xxwidgets_archive_browser_entry entry;
         size_t source;
         if (xxwidgets_archivebrowser_get_entry(ui->members, row, &source, &entry) != XXWIDGETS_OK) return NULL;
-        *is_directory = entry.is_directory != 0; return entry.path;
+        *is_directory = entry.is_directory != 0;
+        return entry.path;
     } else {
         xxwidgets_archive_entry entry;
         if (xxwidgets_archiveview_get_entry(ui->members, row, &entry) != XXWIDGETS_OK) return NULL;
-        *is_directory = entry.is_directory != 0; return entry.path;
+        *is_directory = entry.is_directory != 0;
+        return entry.path;
     }
 }
 
@@ -1749,9 +1874,9 @@ static char *current_member_path(ui_state *ui, size_t *occurrence, int *is_direc
     const char *path;
     size_t row;
     int value = -1, kind = 0;
-    *occurrence = 0; *is_directory = 0;
-    if (xxwidgets_widget_get_value(ui->members, &value) != XXWIDGETS_OK || value < 0 ||
-        !(path = member_row_path(ui, (size_t)value, is_directory))) return NULL;
+    *occurrence = 0;
+    *is_directory = 0;
+    if (xxwidgets_widget_get_value(ui->members, &value) != XXWIDGETS_OK || value < 0 || !(path = member_row_path(ui, (size_t)value, is_directory))) return NULL;
     for (row = 0; row < (size_t)value; ++row) {
         const char *other = member_row_path(ui, row, &kind);
         if (other && kind == *is_directory && same_member_path(other, path)) ++*occurrence;
@@ -1784,21 +1909,21 @@ static int select_member_path(ui_state *ui, const char *path, size_t occurrence,
 static int keep_listing(const ui_state *ui, const ui_job *job, int cancelled)
 {
     size_t i;
-    if (job->request.command == XFU_COMMAND_LIST || job->retrieve_password || !ui->listed_count ||
-        !ui->file_types_path || strcmp(ui->file_types_path, job->archive_path)) return 0;
+    if (job->request.command == XFU_COMMAND_LIST || job->retrieve_password || !ui->listed_count || !ui->file_types_path || strcmp(ui->file_types_path, job->archive_path))
+        return 0;
     if (job->have_file_types && ui->members_type.type != XX_FILE_TYPE_UNKNOWN) {
-        for (i = 0; i < job->type_count && !handle_equal(job->file_types[i], ui->members_type); ++i) {}
+        for (i = 0; i < job->type_count && !handle_equal(job->file_types[i], ui->members_type); ++i) {
+        }
         if (i == job->type_count) return 0;
     }
     if (job->entry_count > ui->listed_count) return 0;
     if ((job->read_all || (!cancelled && job->result == 0)) && ui->listed_count != job->entry_count) return 0;
     for (i = 0; i < job->entry_count; ++i) {
         const xfu_entry *listed = &ui->listed_entries[i], *read = &job->entries[i];
-        if (!listed->name || !read->name || strcmp(listed->name, read->name) ||
-            listed->unpacked_size != read->unpacked_size || listed->packed_size != read->packed_size ||
-            listed->is_encrypted != read->is_encrypted ||
-            listed->is_directory != read->is_directory || strcmp(listed->modified, read->modified) ||
-            strcmp(listed->attributes, read->attributes)) return 0;
+        if (!listed->name || !read->name || strcmp(listed->name, read->name) || listed->unpacked_size != read->unpacked_size ||
+            listed->packed_size != read->packed_size || listed->is_encrypted != read->is_encrypted || listed->is_directory != read->is_directory ||
+            strcmp(listed->modified, read->modified) || strcmp(listed->attributes, read->attributes))
+            return 0;
     }
     return 1;
 }
@@ -1809,20 +1934,26 @@ static int keep_listing(const ui_state *ui, const ui_job *job, int cancelled)
 static void keep_offered_types(const ui_state *ui, ui_job *job)
 {
     size_t i, j;
-    if (job->request.handle.type == XX_FILE_TYPE_UNKNOWN || !ui->file_types_path ||
-        strcmp(ui->file_types_path, job->archive_path) || job->type_count >= ui->file_type_count)
+    if (job->request.handle.type == XX_FILE_TYPE_UNKNOWN || !ui->file_types_path || strcmp(ui->file_types_path, job->archive_path) ||
+        job->type_count >= ui->file_type_count)
         return;
-    for (i = 0; i < job->type_count && !handle_equal(job->file_types[i], job->selected_type); ++i) {}
+    for (i = 0; i < job->type_count && !handle_equal(job->file_types[i], job->selected_type); ++i) {
+    }
     if (i == job->type_count) return; /* The pick does not fit the file. */
     for (i = 0; i < job->type_count; ++i) {
-        for (j = 0; j < ui->file_type_count && !handle_equal(ui->offered_types[j], job->file_types[i]); ++j) {}
+        for (j = 0; j < ui->file_type_count && !handle_equal(ui->offered_types[j], job->file_types[i]); ++j) {
+        }
         if (j == ui->file_type_count) return;
     }
     {
         xx_unpack_handle_t *copy = (xx_unpack_handle_t *)malloc(ui->file_type_count * sizeof(*copy));
-        if (!copy) { job->memory_error = 1; return; }
+        if (!copy) {
+            job->memory_error = 1;
+            return;
+        }
         memcpy(copy, ui->offered_types, ui->file_type_count * sizeof(*copy));
-        free(job->file_types); job->file_types = copy;
+        free(job->file_types);
+        job->file_types = copy;
         job->type_count = ui->file_type_count;
     }
 }
@@ -1838,8 +1969,7 @@ static int stream_permille(const ui_job *job, char *label, size_t size)
         const xx_pd_record *record = &job->progress_snapshot.records[i];
         if (i == job->overall_level || !record->is_busy || !record->total) continue;
         snprintf(label, size, "%.*s", (int)sizeof(record->status), record->status);
-        return record->current >= record->total ? 1000 :
-            (int)((long double)record->current * 1000 / record->total);
+        return record->current >= record->total ? 1000 : (int)((long double)record->current * 1000 / record->total);
     }
     return -1;
 }
@@ -1857,8 +1987,7 @@ static void job_bar(ui_state *ui, ui_job *job, int percent)
 /* The status line of a running job: the members counted and the member the
  * read path named last, and, while that count cannot move, how far the pass
  * over the stream being read has come (label, percent; -1 for none). */
-static void show_job_status(ui_state *ui, ui_job *job, uint64_t completed, uint64_t total,
-                            const char *label, int percent)
+static void show_job_status(ui_state *ui, ui_job *job, uint64_t completed, uint64_t total, const char *label, int percent)
 {
     const char *name = job->status_name ? job->status_name : "";
     /* No ' | ' before a member name that no read path has given yet. */
@@ -1867,16 +1996,12 @@ static void show_job_status(ui_state *ui, ui_job *job, uint64_t completed, uint6
     char stream[320] = "";
     size_t capacity = strlen(name) + sizeof(stream) + 128;
     char *message = (char *)malloc(capacity);
-    if (percent >= 0 && shown)
-        snprintf(stream, sizeof(stream), " | %s %d%%", shown, percent);
+    if (percent >= 0 && shown) snprintf(stream, sizeof(stream), " | %s %d%%", shown, percent);
     free(shown);
     if (!message) return;
-    if (!job->status_counted)
-        snprintf(message, capacity, "%s archive...%s", command_name(job->request.command), stream);
-    else if (total) snprintf(message, capacity, "%s: %" PRIu64 "/%" PRIu64 "%s%s%s",
-        command_name(job->request.command), completed, total, stream, separator, name);
-    else snprintf(message, capacity, "%s: %" PRIu64 " member(s)%s%s%s",
-        command_name(job->request.command), completed, stream, separator, name);
+    if (!job->status_counted) snprintf(message, capacity, "%s archive...%s", command_name(job->request.command), stream);
+    else if (total) snprintf(message, capacity, "%s: %" PRIu64 "/%" PRIu64 "%s%s%s", command_name(job->request.command), completed, total, stream, separator, name);
+    else snprintf(message, capacity, "%s: %" PRIu64 " member(s)%s%s%s", command_name(job->request.command), completed, stream, separator, name);
     show_status(ui, message);
     free(message);
 }
@@ -1892,7 +2017,8 @@ static void drain_job(ui_state *ui)
     char stream_label[sizeof(job->progress_snapshot.records[0].status) + 1] = "";
     if (!job) return;
     mutex_lock(&job->mutex);
-    completed = job->completed; total = job->total;
+    completed = job->completed;
+    total = job->total;
     changed = job->progress_changed;
     if (changed) current = copy_text(job->current_name);
     job->progress_changed = 0;
@@ -1921,20 +2047,23 @@ static void drain_job(ui_state *ui)
      * before its walk): the count cannot move, the bytes read can. So for a
      * count that has not moved for a while (a solid 7-Zip folder is decoded
      * whole at its first file, a large member is read). */
-    stream_percent = !done && !cancelled && permille >= 0 &&
-        (!total || (total == 1 && !completed) || progress_clock() - job->status_since >= 500)
-        ? (permille >= 990 ? 99 : permille / 10) : -1;
+    stream_percent = !done && !cancelled && permille >= 0 && (!total || (total == 1 && !completed) || progress_clock() - job->status_since >= 500)
+                         ? (permille >= 990 ? 99 : permille / 10)
+                         : -1;
     if (changed) {
         /* A call without a name keeps the member named last. */
-        if (current) { free(job->status_name); job->status_name = current; current = NULL; }
+        if (current) {
+            free(job->status_name);
+            job->status_name = current;
+            current = NULL;
+        }
         job->status_counted = 1;
     }
     if (!cancelled && (changed || encryption_changed || stream_percent != job->status_percent)) {
         job->status_percent = stream_percent;
         show_job_status(ui, job, completed, total, stream_label, stream_percent);
     }
-    if (changed && !cancelled && total)
-        job_bar(ui, job, completed >= total ? 100 : (int)((long double)completed * 100 / total));
+    if (changed && !cancelled && total) job_bar(ui, job, completed >= total ? 100 : (int)((long double)completed * 100 / total));
     free(current);
     if (!done) return;
     job_join(job);
@@ -1945,21 +2074,20 @@ static void drain_job(ui_state *ui)
         if (current_archive) {
             /* The same path may now hold a different, plain archive. A
              * completed ordinary listing is authoritative for its marker. */
-            if (encrypted || (job->request.command == XFU_COMMAND_LIST && job->result == 0))
-                set_encryption_marker(ui, encrypted);
+            if (encrypted || (job->request.command == XFU_COMMAND_LIST && job->result == 0)) set_encryption_marker(ui, encrypted);
             notify_encryption = encrypted && !cancelled && !ui->closing;
         }
     }
     if (job->retrieve_password) {
         char *path = widget_text(ui->archive_path);
-        retrieval_current = path && !strcmp(path, job->archive_path) &&
-            ui->password_archive_revision == job->retrieve_revision;
+        retrieval_current = path && !strcmp(path, job->archive_path) && ui->password_archive_revision == job->retrieve_revision;
         free(path);
     }
     if (job->have_file_types) keep_offered_types(ui, job);
-    if ((!job->retrieve_password || (job->result == 0 && !cancelled && retrieval_current)) &&
-        job->have_file_types && !populate_file_types(ui, job)) {
-        append_log(ui, "Could not display the detected file types."); job->result = 2; display_ok = 0;
+    if ((!job->retrieve_password || (job->result == 0 && !cancelled && retrieval_current)) && job->have_file_types && !populate_file_types(ui, job)) {
+        append_log(ui, "Could not display the detected file types.");
+        job->result = 2;
+        display_ok = 0;
     }
     if (ui->startup_handle_pending) {
         ui->startup_handle_pending = 0;
@@ -1968,61 +2096,57 @@ static void drain_job(ui_state *ui)
          * so a successful extraction cannot hide a different selected handle. */
         if (ui->smoke && ui->startup_handle.type != XX_FILE_TYPE_UNKNOWN && job->result != 2) {
             xx_var value = {0};
-            if (!handle_equal(job->request.handle, ui->startup_handle) ||
-                !job->have_file_types || !handle_equal(job->selected_type, ui->startup_handle) ||
-                !handle_equal(ui->selected_type, ui->startup_handle) ||
-                xxwidgets_combobox_get_current(ui->file_type, &value) != XXWIDGETS_OK ||
+            if (!handle_equal(job->request.handle, ui->startup_handle) || !job->have_file_types || !handle_equal(job->selected_type, ui->startup_handle) ||
+                !handle_equal(ui->selected_type, ui->startup_handle) || xxwidgets_combobox_get_current(ui->file_type, &value) != XXWIDGETS_OK ||
                 value.type != XX_VAR_TYPE_UINT32 || value.val.u32 != (uint32_t)ui->startup_handle.type) {
                 fputs("Startup unpack handle: controller/combobox selection mismatch.\n", stderr);
-                append_log(ui, "Could not select the requested unpack handle."); job->result = 2;
-            } else fprintf(stderr, "Startup unpack handle: %s (%u)\n",
-                unpack_handle_label(ui->startup_handle), (unsigned)ui->startup_handle.type);
+                append_log(ui, "Could not select the requested unpack handle.");
+                job->result = 2;
+            } else fprintf(stderr, "Startup unpack handle: %s (%u)\n", unpack_handle_label(ui->startup_handle), (unsigned)ui->startup_handle.type);
         }
     }
     /* No Test or Extract for a type the run found is not an archive. */
-    if (job->not_archive && ui->file_types_path && !strcmp(ui->file_types_path, job->archive_path) &&
-        handle_equal(ui->selected_type, job->selected_type)) ui->selected_not_archive = 1;
-    if ((!job->retrieve_password || (job->result == 0 && !cancelled && retrieval_current)) &&
-        !job->request.extract_selected &&
-        !keep_listing(ui, job, cancelled)) {
+    if (job->not_archive && ui->file_types_path && !strcmp(ui->file_types_path, job->archive_path) && handle_equal(ui->selected_type, job->selected_type))
+        ui->selected_not_archive = 1;
+    if ((!job->retrieve_password || (job->result == 0 && !cancelled && retrieval_current)) && !job->request.extract_selected && !keep_listing(ui, job, cancelled)) {
         /* A password retrieval, or a complete Test/Extract of an archive
          * changed on disk, lists the archive on screen again: keep the folder
          * and the current row the user had, or no current row (a recovered
          * member's folder wins later). Open starts at the root, and so does a
          * partial relisting. */
         int browser = xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER;
-        int keep = (job->retrieve_password || (job->request.command != XFU_COMMAND_LIST && !cancelled && job->read_all)) &&
-            ui->members_archive && !strcmp(ui->members_archive, job->archive_path) && ui->listed_count;
+        int keep = (job->retrieve_password || (job->request.command != XFU_COMMAND_LIST && !cancelled && job->read_all)) && ui->members_archive &&
+                   !strcmp(ui->members_archive, job->archive_path) && ui->listed_count;
         size_t occurrence = 0;
         int current_directory = 0;
         char *directory = keep && browser ? copy_text(xxwidgets_archivebrowser_directory(ui->members)) : NULL;
         char *current = keep ? current_member_path(ui, &occurrence, &current_directory) : NULL;
         if (!populate_members(ui, job)) {
             /* Only the view failed: a Test or Extract keeps its own result. */
-            append_log(ui, "Could not display archive members."); display_ok = 0;
+            append_log(ui, "Could not display archive members.");
+            display_ok = 0;
             if (job->request.command == XFU_COMMAND_LIST) job->result = 2;
         } else if (keep) {
             /* A folder that is gone leaves the root shown, with its first row. */
-            int restored = !directory || !directory[0] ||
-                xxwidgets_archivebrowser_set_directory(ui->members, directory) == XXWIDGETS_OK;
+            int restored = !directory || !directory[0] || xxwidgets_archivebrowser_set_directory(ui->members, directory) == XXWIDGETS_OK;
             if (current) select_member_path(ui, current, occurrence, current_directory);
             else if (browser && restored) xxwidgets_archivebrowser_set_selection(ui->members, NULL, 0);
             update_metadata(ui);
         }
-        free(directory); free(current);
+        free(directory);
+        free(current);
     }
-    if (cancelled) show_status(ui, job->request.command == XFU_COMMAND_EXTRACT ?
-        "Cancelled. Completed files are kept." : "Cancelled.");
+    if (cancelled) show_status(ui, job->request.command == XFU_COMMAND_EXTRACT ? "Cancelled. Completed files are kept." : "Cancelled.");
     else if (!job->retrieve_password && job->request.command == XFU_COMMAND_LIST && job->have_file_types &&
-             (job->not_archive || (!job->type_count && job->result != 2)) &&
-             !job->memory_error && display_ok) {
+             (job->not_archive || (!job->type_count && job->result != 2)) && !job->memory_error && display_ok) {
         char friendly[96];
-        snprintf(friendly, sizeof(friendly), "%s: no archive members.",
-                 job->not_archive ? xx_format_file_type_to_string(job->not_archive_type) : "No unpacker");
-        show_status(ui, friendly); job->result = 0;
+        snprintf(friendly, sizeof(friendly), "%s: no archive members.", job->not_archive ? xx_format_file_type_to_string(job->not_archive_type) : "No unpacker");
+        show_status(ui, friendly);
+        job->result = 0;
         xxwidgets_widget_set_value(ui->progress, 0);
     } else if (job->result == 0) {
-        show_status(ui, "Done."); xxwidgets_widget_set_value(ui->progress, 100);
+        show_status(ui, "Done.");
+        xxwidgets_widget_set_value(ui->progress, 100);
     } else if (job->result == 1) show_status(ui, "Completed with errors; see log.");
     else show_status(ui, "Operation failed; see log.");
     if (job->result != 0 && desktop_shell(ui)) ui->log_visible = 1;
@@ -2032,8 +2156,7 @@ static void drain_job(ui_state *ui)
         else if (job->result != 0) show_status(ui, "Password retrieval failed; existing input kept.");
         else retrieval_result = finish_password_retrieval(ui, job);
     }
-    if (ui->password_smoke == 3 && job->retrieve_password)
-        smoke_retrieval_finished(ui, job, retrieval_result);
+    if (ui->password_smoke == 3 && job->retrieve_password) smoke_retrieval_finished(ui, job, retrieval_result);
     if ((ui->password_smoke == 1 || ui->password_smoke == 2) && job->result == 0) {
         if (job->request.command == XFU_COMMAND_LIST) {
             if (!smoke_password_listing(ui)) {
@@ -2051,23 +2174,20 @@ static void drain_job(ui_state *ui)
             ui->pending_command = XFU_COMMAND_EXTRACT;
         }
     }
-    if (ui->smoke && !(ui->password_smoke == 3 && job->retrieve_password) &&
-        (!ui->type_smoke || job->result != 0) &&
+    if (ui->smoke && !(ui->password_smoke == 3 && job->retrieve_password) && (!ui->type_smoke || job->result != 0) &&
         (!ui->password_smoke || job->result != 0 || job->request.command == XFU_COMMAND_EXTRACT ||
          (ui->password_smoke == 3 && job->request.command == XFU_COMMAND_TEST))) {
-        ui->exit_code = job->result; ui->running = 0;
+        ui->exit_code = job->result;
+        ui->running = 0;
     }
     /* A verified embedded credential may have been filled while presenting
      * this listing. It suppresses an informational notice, not a blocked
      * operation. Ordinary smoke runs never open an unattended modal dialog. */
-    notify_encryption = notify_encryption &&
-        (blocked || (!job->request.password && !ui->automatic_password)) &&
-        (!ui->smoke || ui->encryption_smoke);
+    notify_encryption = notify_encryption && (blocked || (!job->request.password && !ui->automatic_password)) && (!ui->smoke || ui->encryption_smoke);
     ui->job = NULL;
     job_destroy(job);
     set_busy(ui, 0);
-    if (notify_encryption && !show_encryption_notice(ui, blocked ? blocked : XFU_ENCRYPTION_DETECTED) && ui->smoke)
-        ui->exit_code = 2;
+    if (notify_encryption && !show_encryption_notice(ui, blocked ? blocked : XFU_ENCRYPTION_DETECTED) && ui->smoke) ui->exit_code = 2;
     if (ui->closing) ui->running = 0;
 }
 
@@ -2078,16 +2198,17 @@ static int browse_file(ui_state *ui, xxwidgets_widget *target)
 {
     char *current = widget_text(target), *selected = NULL;
     int accepted = 0;
-    xxwidgets_status status = xxwidgets_file_dialog(ui->window, XXWIDGETS_FILE_DIALOG_OPEN,
-        "Open archive", current, &selected, &accepted);
+    xxwidgets_status status = xxwidgets_file_dialog(ui->window, XXWIDGETS_FILE_DIALOG_OPEN, "Open archive", current, &selected, &accepted);
     free(current);
-    if (status != XXWIDGETS_OK) { show_status(ui, "Cannot show the file dialog."); return 0; }
+    if (status != XXWIDGETS_OK) {
+        show_status(ui, "Cannot show the file dialog.");
+        return 0;
+    }
     if (!accepted) return 0;
     status = xxwidgets_widget_set_text(target, selected);
     free(selected);
     /* The field holds UTF-8; a name in another encoding cannot be shown there. */
-    if (status == XXWIDGETS_INVALID_ARGUMENT)
-        show_status(ui, "The selected file name is not valid UTF-8; rename the file to open it here.");
+    if (status == XXWIDGETS_INVALID_ARGUMENT) show_status(ui, "The selected file name is not valid UTF-8; rename the file to open it here.");
     return status == XXWIDGETS_OK;
 }
 #endif
@@ -2099,8 +2220,10 @@ static char *wide_utf8(const wchar_t *wide)
     char *result;
     if (!length) return NULL;
     result = (char *)malloc((size_t)length);
-    if (result && !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1,
-                                      result, length, NULL, NULL)) { free(result); result = NULL; }
+    if (result && !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, result, length, NULL, NULL)) {
+        free(result);
+        result = NULL;
+    }
     return result;
 }
 
@@ -2109,17 +2232,26 @@ int xfu_ui_windows_arguments(int *argc, char ***argv)
     LPWSTR *wide;
     int count, i;
     char **result;
-    *argc = 0; *argv = NULL;
+    *argc = 0;
+    *argv = NULL;
     wide = CommandLineToArgvW(GetCommandLineW(), &count);
     if (!wide) return 0;
     result = (char **)calloc((size_t)count + 1, sizeof(*result));
-    if (!result) { LocalFree(wide); return 0; }
+    if (!result) {
+        LocalFree(wide);
+        return 0;
+    }
     for (i = 0; i < count; ++i) {
         result[i] = wide_utf8(wide[i]);
-        if (!result[i]) { xfu_ui_free_arguments(count, result); LocalFree(wide); return 0; }
+        if (!result[i]) {
+            xfu_ui_free_arguments(count, result);
+            LocalFree(wide);
+            return 0;
+        }
     }
     LocalFree(wide);
-    *argc = count; *argv = result;
+    *argc = count;
+    *argv = result;
     return 1;
 }
 
@@ -2135,8 +2267,7 @@ static int browse_file(ui_state *ui, xxwidgets_widget *target)
     wchar_t path[32768] = L"";
     OPENFILENAMEW dialog;
     char *current = widget_text(target), *selected;
-    if (current && current[0])
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, current, -1, path, 32768);
+    if (current && current[0]) MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, current, -1, path, 32768);
     free(current);
     memset(&dialog, 0, sizeof(dialog));
     dialog.lStructSize = sizeof(dialog);
@@ -2147,7 +2278,11 @@ static int browse_file(ui_state *ui, xxwidgets_widget *target)
     dialog.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (!GetOpenFileNameW(&dialog)) return 0;
     selected = wide_utf8(path);
-    if (selected) { xxwidgets_widget_set_text(target, selected); free(selected); return 1; }
+    if (selected) {
+        xxwidgets_widget_set_text(target, selected);
+        free(selected);
+        return 1;
+    }
     return 0;
 }
 
@@ -2157,10 +2292,8 @@ static int CALLBACK native_folder_callback(HWND dialog, UINT message, LPARAM par
     if (message == BFFM_INITIALIZED) {
         RECT parent, bounds;
         if (GetWindowRect((HWND)owner, &parent) && GetWindowRect(dialog, &bounds))
-            SetWindowPos(dialog, NULL,
-                parent.left + ((parent.right - parent.left) - (bounds.right - bounds.left)) / 2,
-                parent.top + ((parent.bottom - parent.top) - (bounds.bottom - bounds.top)) / 2,
-                0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(dialog, NULL, parent.left + ((parent.right - parent.left) - (bounds.right - bounds.left)) / 2,
+                         parent.top + ((parent.bottom - parent.top) - (bounds.bottom - bounds.top)) / 2, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
     return 0;
 }
@@ -2178,8 +2311,7 @@ static void native_extract_archive(ui_state *ui, int selected_only)
         if (SUCCEEDED(initialized)) CoUninitialize();
         return;
     }
-    dialog.lpszTitle = selected_only ? L"Extract the selected files and folders to this folder:" :
-        L"Extract the entire archive to this folder:";
+    dialog.lpszTitle = selected_only ? L"Extract the selected files and folders to this folder:" : L"Extract the entire archive to this folder:";
     dialog.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     dialog.lpfn = native_folder_callback;
     dialog.lParam = (LPARAM)dialog.hwndOwner;
@@ -2188,7 +2320,8 @@ static void native_extract_archive(ui_state *ui, int selected_only)
         if (SHGetPathFromIDListW(selected, path)) {
             char *destination = wide_utf8(path);
             if (destination) {
-                xxwidgets_widget_set_text(ui->output_dir, destination); free(destination);
+                xxwidgets_widget_set_text(ui->output_dir, destination);
+                free(destination);
                 ui->pending_extract_selected = selected_only;
                 ui->pending_command = XFU_COMMAND_EXTRACT;
             }
@@ -2210,7 +2343,10 @@ static void native_copy_path(ui_state *ui)
     if (!length) return;
     memory = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)length * sizeof(*wide));
     wide = memory ? (wchar_t *)GlobalLock(memory) : NULL;
-    if (!wide) { if (memory) GlobalFree(memory); return; }
+    if (!wide) {
+        if (memory) GlobalFree(memory);
+        return;
+    }
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, entry.path, -1, wide, length);
     GlobalUnlock(memory);
     if (OpenClipboard((HWND)xxwidgets_widget_native_handle(ui->window))) {
@@ -2240,10 +2376,8 @@ static void native_information(ui_state *ui)
         if (source < ui->listed_count) selected = ui->listed_entries[source];
         selected.name = entry.path;
         selected.is_directory = entry.is_directory != 0;
-        if ((entry.flags & XXWIDGETS_ARCHIVE_SIZE_KNOWN) && entry.size <= INT64_MAX)
-            selected.unpacked_size = (int64_t)entry.size;
-        if ((entry.flags & XXWIDGETS_ARCHIVE_PACKED_SIZE_KNOWN) && entry.packed_size <= INT64_MAX)
-            selected.packed_size = (int64_t)entry.packed_size;
+        if ((entry.flags & XXWIDGETS_ARCHIVE_SIZE_KNOWN) && entry.size <= INT64_MAX) selected.unpacked_size = (int64_t)entry.size;
+        if ((entry.flags & XXWIDGETS_ARCHIVE_PACKED_SIZE_KNOWN) && entry.packed_size <= INT64_MAX) selected.packed_size = (int64_t)entry.packed_size;
         if (source >= ui->listed_count) {
             snprintf(selected.modified, sizeof(selected.modified), "%s", entry.modified ? entry.modified : "");
             snprintf(selected.attributes, sizeof(selected.attributes), "%s", entry.attributes ? entry.attributes : "");
@@ -2252,10 +2386,10 @@ static void native_information(ui_state *ui)
     }
     /* Selection and listing pointers are borrowed only until this synchronous
      * formatter returns; the modal dialog receives its own complete text. */
-    message = xfu_information_text(archive, ui->listed_entries, ui->listed_count,
-                                   selection, ui->advanced_visible != 0);
+    message = xfu_information_text(archive, ui->listed_entries, ui->listed_count, selection, ui->advanced_visible != 0);
     if (message) {
-        xfu_native_shell_information(ui->window, message); free(message);
+        xfu_native_shell_information(ui->window, message);
+        free(message);
     } else show_status(ui, "Cannot allocate archive information.");
     free(archive);
 }
@@ -2265,7 +2399,8 @@ static void native_action(void *user, xfu_shell_action action, const char *path)
     ui_state *ui = (ui_state *)user;
     if (action == XFU_SHELL_OPEN_PATH) {
         if (!ui->job && !ui->closing && path) {
-            xxwidgets_widget_set_text(ui->archive_path, path); ui->pending_command = XFU_COMMAND_LIST;
+            xxwidgets_widget_set_text(ui->archive_path, path);
+            ui->pending_command = XFU_COMMAND_LIST;
         }
     } else ui->pending_action = action;
 }
@@ -2275,40 +2410,59 @@ static void run_native_action(ui_state *ui)
     xfu_shell_action action = ui->pending_action;
     ui->pending_action = 0;
     if (action == XFU_SHELL_QUIT) {
-        ui->closing = 1; if (ui->job) cancel_job(ui); else ui->running = 0; return;
+        ui->closing = 1;
+        if (ui->job) cancel_job(ui);
+        else ui->running = 0;
+        return;
     }
-    if (action == XFU_SHELL_CANCEL) { cancel_job(ui); return; }
-    if (action == XFU_SHELL_OPTIONS) { show_options(ui); return; }
+    if (action == XFU_SHELL_CANCEL) {
+        cancel_job(ui);
+        return;
+    }
+    if (action == XFU_SHELL_OPTIONS) {
+        show_options(ui);
+        return;
+    }
     if (action == XFU_SHELL_LOG) {
         int visible = !ui->log_visible;
         if (xxwidgets_settings_set_bool(ui->settings, UI_SETTING_LOG, visible) == XXWIDGETS_OK) {
-            ui->log_visible = visible; layout(ui, ui->columns, ui->rows);
+            ui->log_visible = visible;
+            layout(ui, ui->columns, ui->rows);
         } else show_status(ui, "Cannot save the operation log setting.");
         return;
     }
-    if (action == XFU_SHELL_COPY) { native_copy_path(ui); return; }
-    if (action == XFU_SHELL_INFO) { native_information(ui); return; }
-    if (action == XFU_SHELL_FORMATS) { show_supported_types(ui); return; }
+    if (action == XFU_SHELL_COPY) {
+        native_copy_path(ui);
+        return;
+    }
+    if (action == XFU_SHELL_INFO) {
+        native_information(ui);
+        return;
+    }
+    if (action == XFU_SHELL_FORMATS) {
+        show_supported_types(ui);
+        return;
+    }
     if (action == XFU_SHELL_ABOUT) {
-        if (xxwidgets_about_dialog_show(ui->about, ui->window) != XXWIDGETS_OK)
-            show_status(ui, "Cannot show the About dialog.");
+        if (xxwidgets_about_dialog_show(ui->about, ui->window) != XXWIDGETS_OK) show_status(ui, "Cannot show the About dialog.");
         return;
     }
     if (ui->job || ui->closing) return;
-    if (!archive_actions(ui) &&
-        (action == XFU_SHELL_EXTRACT || action == XFU_SHELL_EXTRACT_SELECTED || action == XFU_SHELL_TEST)) {
+    if (!archive_actions(ui) && (action == XFU_SHELL_EXTRACT || action == XFU_SHELL_EXTRACT_SELECTED || action == XFU_SHELL_TEST)) {
         char message[128];
-        if (ui->selected_type.type == XX_FILE_TYPE_UNKNOWN)
-            snprintf(message, sizeof(message), "Open an archive with a supported unpacker first.");
-        else snprintf(message, sizeof(message), "%s cannot be opened as an archive. Choose another unpacker.",
-                      unpack_handle_label(ui->selected_type));
-        show_status(ui, message); return;
+        if (ui->selected_type.type == XX_FILE_TYPE_UNKNOWN) snprintf(message, sizeof(message), "Open an archive with a supported unpacker first.");
+        else snprintf(message, sizeof(message), "%s cannot be opened as an archive. Choose another unpacker.", unpack_handle_label(ui->selected_type));
+        show_status(ui, message);
+        return;
     }
     if (action == XFU_SHELL_EXTRACT || action == XFU_SHELL_TEST || action == XFU_SHELL_REFRESH) {
         char *path = widget_text(ui->archive_path);
         int present = path && path[0];
         free(path);
-        if (!present) { show_status(ui, "Open an archive first."); return; }
+        if (!present) {
+            show_status(ui, "Open an archive first.");
+            return;
+        }
     }
     if (action == XFU_SHELL_OPEN) {
         if (browse_file(ui, ui->archive_path)) ui->pending_command = XFU_COMMAND_LIST;
@@ -2317,30 +2471,38 @@ static void run_native_action(ui_state *ui)
     else if (action == XFU_SHELL_TEST) ui->pending_command = XFU_COMMAND_TEST;
     else if (action == XFU_SHELL_REFRESH) ui->pending_command = XFU_COMMAND_LIST;
     else if (action == XFU_SHELL_ROOT) {
-        xxwidgets_archivebrowser_set_directory(ui->members, ""); update_metadata(ui);
+        xxwidgets_archivebrowser_set_directory(ui->members, "");
+        update_metadata(ui);
     } else if (action == XFU_SHELL_UP) {
-        xxwidgets_archivebrowser_up(ui->members); update_metadata(ui);
+        xxwidgets_archivebrowser_up(ui->members);
+        update_metadata(ui);
     } else if (action == XFU_SHELL_ENTER_FOLDER) {
         xxwidgets_archive_browser_entry entry;
         size_t source;
-        if (xxwidgets_archivebrowser_get_selection(ui->members, &source, &entry) == XXWIDGETS_OK &&
-            entry.path && entry.is_directory) {
-            xxwidgets_archivebrowser_set_directory(ui->members, entry.path); update_metadata(ui);
+        if (xxwidgets_archivebrowser_get_selection(ui->members, &source, &entry) == XXWIDGETS_OK && entry.path && entry.is_directory) {
+            xxwidgets_archivebrowser_set_directory(ui->members, entry.path);
+            update_metadata(ui);
         }
     }
 }
 static int install_native_shortcuts(ui_state *ui)
 {
-    static const struct { const char *name, *sequence; xfu_shell_action action; } definitions[] = {
-        {"open", "Ctrl+O", XFU_SHELL_OPEN},
-        {"extract", "Ctrl+E", XFU_SHELL_EXTRACT},
-        {"extract_selected", "Ctrl+Shift+E", XFU_SHELL_EXTRACT_SELECTED},
-        {"test", "Ctrl+T", XFU_SHELL_TEST}, {"copy_path", "Ctrl+Shift+C", XFU_SHELL_COPY},
-        {"information", "Alt+Enter", XFU_SHELL_INFO}, {"log", "Ctrl+L", XFU_SHELL_LOG},
-        {"cancel", "Escape", XFU_SHELL_CANCEL}, {"quit", "Ctrl+Q", XFU_SHELL_QUIT},
-        {"root", "Ctrl+Home", XFU_SHELL_ROOT}, {"refresh", "F5", XFU_SHELL_REFRESH},
-        {"about", "F1", XFU_SHELL_ABOUT}, {"options", "Ctrl+Comma", XFU_SHELL_OPTIONS}
-    };
+    static const struct {
+        const char *name, *sequence;
+        xfu_shell_action action;
+    } definitions[] = {{"open", "Ctrl+O", XFU_SHELL_OPEN},
+                       {"extract", "Ctrl+E", XFU_SHELL_EXTRACT},
+                       {"extract_selected", "Ctrl+Shift+E", XFU_SHELL_EXTRACT_SELECTED},
+                       {"test", "Ctrl+T", XFU_SHELL_TEST},
+                       {"copy_path", "Ctrl+Shift+C", XFU_SHELL_COPY},
+                       {"information", "Alt+Enter", XFU_SHELL_INFO},
+                       {"log", "Ctrl+L", XFU_SHELL_LOG},
+                       {"cancel", "Escape", XFU_SHELL_CANCEL},
+                       {"quit", "Ctrl+Q", XFU_SHELL_QUIT},
+                       {"root", "Ctrl+Home", XFU_SHELL_ROOT},
+                       {"refresh", "F5", XFU_SHELL_REFRESH},
+                       {"about", "F1", XFU_SHELL_ABOUT},
+                       {"options", "Ctrl+Comma", XFU_SHELL_OPTIONS}};
     xx_shortcut defaults[sizeof(definitions) / sizeof(definitions[0])];
     xxwidgets_shortcut_action actions[sizeof(definitions) / sizeof(definitions[0])];
     xxwidgets_shortcut fallback[sizeof(definitions) / sizeof(definitions[0])];
@@ -2360,12 +2522,14 @@ static int install_native_shortcuts(ui_state *ui)
         DWORD length = GetModuleFileNameW(NULL, path, 32768);
         slash = length && length < 32768 ? wcsrchr(path, L'\\') : NULL;
         if (slash && (size_t)(slash - path) + 15 < 32768) {
-            wcscpy(slash + 1, L"shortcuts.ini"); utf8 = wide_utf8(path);
+            wcscpy(slash + 1, L"shortcuts.ini");
+            utf8 = wide_utf8(path);
         }
     }
-    if (utf8 && xx_shortcuts_load(utf8, defaults, count, &loaded) == XXFC_OK)
-        installed = xxwidgets_settings_install_shortcuts(ui->window, loaded, actions, count);
-    xx_shortcuts_destroy(loaded); free(utf8); free(path);
+    if (utf8 && xx_shortcuts_load(utf8, defaults, count, &loaded) == XXFC_OK) installed = xxwidgets_settings_install_shortcuts(ui->window, loaded, actions, count);
+    xx_shortcuts_destroy(loaded);
+    free(utf8);
+    free(path);
     if (installed == XXWIDGETS_OK) return 1;
     show_status(ui, "Cannot apply shortcuts.ini. Using default shortcuts.");
     return xxwidgets_window_set_shortcuts(ui->window, fallback, count) == XXWIDGETS_OK;
@@ -2381,7 +2545,7 @@ static int install_native_shortcuts(ui_state *ui)
 
 static void rect(xxwidgets_widget *widget, int x, int y, int width, int height)
 {
-    xxwidgets_rect bounds = { x, y, width > 0 ? width : 1, height > 0 ? height : 1 };
+    xxwidgets_rect bounds = {x, y, width > 0 ? width : 1, height > 0 ? height : 1};
     xxwidgets_widget_set_rect(widget, bounds);
 }
 
@@ -2391,22 +2555,17 @@ static void layout(ui_state *ui, int columns, int rows)
     int native_browse = ui->backend == XXWIDGETS_BACKEND_NATIVE;
     int browse_width;
     if (desktop_shell(ui)) {
-        xxwidgets_widget *hidden[] = {
-            ui->archive_label, ui->archive_path, ui->archive_browse, ui->output_label, ui->output_dir,
-            ui->members_label, ui->quit, ui->help,
-            ui->log_toggle, ui->cancel, ui->options, ui->about_button, ui->formats_button
-        };
-        xxwidgets_widget *toolbar[] = { ui->open, ui->extract, ui->test,
-            ui->copy_path, ui->info };
+        xxwidgets_widget *hidden[] = {ui->archive_label, ui->archive_path, ui->archive_browse, ui->output_label, ui->output_dir,   ui->members_label, ui->quit,
+                                      ui->help,          ui->log_toggle,   ui->cancel,         ui->options,      ui->about_button, ui->formats_button};
+        xxwidgets_widget *toolbar[] = {ui->open, ui->extract, ui->test, ui->copy_path, ui->info};
         size_t i;
         int log_rows, detail_rows;
         if (columns < 96) columns = 96;
         if (rows < 20) rows = 20;
-        ui->columns = columns; ui->rows = rows;
-        for (i = 0; i < sizeof(hidden) / sizeof(hidden[0]); ++i)
-            xxwidgets_widget_set_visible(hidden[i], 0);
-        for (i = 0; i < sizeof(toolbar) / sizeof(toolbar[0]); ++i)
-            rect(toolbar[i], 1 + (int)i * 10, 0, 9, 3);
+        ui->columns = columns;
+        ui->rows = rows;
+        for (i = 0; i < sizeof(hidden) / sizeof(hidden[0]); ++i) xxwidgets_widget_set_visible(hidden[i], 0);
+        for (i = 0; i < sizeof(toolbar) / sizeof(toolbar[0]); ++i) rect(toolbar[i], 1 + (int)i * 10, 0, 9, 3);
         {
             int type_width = columns < 104 ? columns - 80 : 24;
             rect(ui->type_label, 52, 1, 10, 1);
@@ -2429,8 +2588,7 @@ static void layout(ui_state *ui, int columns, int rows)
             rect(ui->log, 1, rows - 7, columns - 2, 6);
         }
         rect(ui->metadata, 1, rows - 1, columns - 40, 1);
-        rect(ui->status, ui->busy ? 1 : columns - 38, rows - 1,
-            ui->busy ? columns - 30 : 37, 1);
+        rect(ui->status, ui->busy ? 1 : columns - 38, rows - 1, ui->busy ? columns - 30 : 37, 1);
         rect(ui->progress, columns - 28, rows - 1, 27, 1);
         xxwidgets_widget_set_visible(ui->metadata, !ui->busy);
         xxwidgets_widget_set_visible(ui->progress, ui->busy);
@@ -2443,7 +2601,8 @@ static void layout(ui_state *ui, int columns, int rows)
     if (columns < CLASSIC_MIN_COLUMNS) columns = CLASSIC_MIN_COLUMNS;
     if (rows < (ui->backend == XXWIDGETS_BACKEND_NATIVE ? NATIVE_MIN_ROWS : CLASSIC_MIN_ROWS))
         rows = ui->backend == XXWIDGETS_BACKEND_NATIVE ? NATIVE_MIN_ROWS : CLASSIC_MIN_ROWS;
-    ui->columns = columns; ui->rows = rows;
+    ui->columns = columns;
+    ui->rows = rows;
     browse_width = native_browse ? 11 : 0;
     rect(ui->archive_label, 1, 0, 9, 1);
     rect(ui->archive_path, 10, 0, columns - 11 - browse_width, 1);
@@ -2477,8 +2636,14 @@ static void layout(ui_state *ui, int columns, int rows)
     /* The members browser is drawn no shorter than about 4.2 rows: a short
      * window gives up a details row, then the gap, before it gets less. A
      * scrolled list (details, log) is itself drawn about two rows tall. */
-    if (ui->advanced_visible && archive_height < 5) { --details_height; ++archive_height; }
-    if (ui->advanced_visible && archive_height < 5) { gap = 0; ++archive_height; }
+    if (ui->advanced_visible && archive_height < 5) {
+        --details_height;
+        ++archive_height;
+    }
+    if (ui->advanced_visible && archive_height < 5) {
+        gap = 0;
+        ++archive_height;
+    }
     metadata_y = 6 + archive_height;
     progress_y = metadata_y + 1 + details_height + gap;
     rect(ui->members_label, 1, 5, columns - 59, 1);
@@ -2498,16 +2663,14 @@ static void resize_native(ui_state *ui)
     RECT bounds;
     if (ui->layout_ready && ui->backend == XXWIDGETS_BACKEND_NATIVE && ui->cell_width && ui->cell_height &&
         GetClientRect((HWND)xxwidgets_widget_native_handle(ui->window), &bounds))
-        layout(ui, (bounds.right - bounds.left) / ui->cell_width,
-               (bounds.bottom - bounds.top) / ui->cell_height);
+        layout(ui, (bounds.right - bounds.left) / ui->cell_width, (bounds.bottom - bounds.top) / ui->cell_height);
 #elif defined(__APPLE__)
     /* AppKit rounds window sizes to the nearest cell and is left as it was. */
     (void)ui;
 #else
     /* The backend has already converted the new window size to cells. */
     xxwidgets_rect bounds;
-    if (ui->layout_ready && ui->backend == XXWIDGETS_BACKEND_NATIVE &&
-        xxwidgets_widget_get_rect(ui->window, &bounds) == XXWIDGETS_OK &&
+    if (ui->layout_ready && ui->backend == XXWIDGETS_BACKEND_NATIVE && xxwidgets_widget_get_rect(ui->window, &bounds) == XXWIDGETS_OK &&
         (bounds.width != ui->window_columns || bounds.height != ui->window_rows)) {
         ui->window_columns = bounds.width;
         ui->window_rows = bounds.height;
@@ -2522,8 +2685,7 @@ static void resize_terminal(ui_state *ui)
     xxwidgets_rect bounds;
     if (ui->backend != XXWIDGETS_BACKEND_TUI) return;
 #ifdef _WIN32
-    HANDLE output = CreateFileW(L"CONOUT$", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
+    HANDLE output = CreateFileW(L"CONOUT$", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     CONSOLE_SCREEN_BUFFER_INFO info;
     if (output != INVALID_HANDLE_VALUE) {
         if (GetConsoleScreenBufferInfo(output, &info)) {
@@ -2535,14 +2697,18 @@ static void resize_terminal(ui_state *ui)
 #else
     struct winsize size;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col && size.ws_row) {
-        columns = size.ws_col; rows = size.ws_row;
+        columns = size.ws_col;
+        rows = size.ws_row;
     }
 #endif
-    columns -= 2; rows -= 2;
+    columns -= 2;
+    rows -= 2;
     if (columns < CLASSIC_MIN_COLUMNS) columns = CLASSIC_MIN_COLUMNS;
     if (rows < CLASSIC_MIN_ROWS) rows = CLASSIC_MIN_ROWS;
     if (columns == ui->columns && rows == ui->rows) return;
-    bounds.x = bounds.y = 0; bounds.width = columns; bounds.height = rows;
+    bounds.x = bounds.y = 0;
+    bounds.width = columns;
+    bounds.height = rows;
     xxwidgets_widget_set_rect(ui->window, bounds);
     layout(ui, columns, rows);
 }
@@ -2553,7 +2719,9 @@ static int queue_password_retrieval(ui_state *ui)
     if (ui->job || ui->closing) return 0;
     path = widget_text(ui->archive_path);
     if (!path || !path[0]) {
-        free(path); show_status(ui, "Enter an archive path before retrieving its password."); return 0;
+        free(path);
+        show_status(ui, "Enter an archive path before retrieving its password.");
+        return 0;
     }
     free(path);
     ui->pending_password_retrieval = 1;
@@ -2567,11 +2735,9 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
     (void)app;
 #ifndef _WIN32
     if (!ui->job && !ui->closing &&
-        ((event->type == XXWIDGETS_EVENT_CLICK &&
-          (event->widget == ui->open || event->widget == ui->extract || event->widget == ui->test ||
-           event->widget == ui->archive_browse || event->widget == ui->get_password)) ||
-         (event->type == XXWIDGETS_EVENT_ACTIVATE && event->widget == ui->archive_path) ||
-         (event->type == XXWIDGETS_EVENT_SELECT && event->widget == ui->file_type))) {
+        ((event->type == XXWIDGETS_EVENT_CLICK && (event->widget == ui->open || event->widget == ui->extract || event->widget == ui->test ||
+                                                   event->widget == ui->archive_browse || event->widget == ui->get_password)) ||
+         (event->type == XXWIDGETS_EVENT_ACTIVATE && event->widget == ui->archive_path) || (event->type == XXWIDGETS_EVENT_SELECT && event->widget == ui->file_type))) {
         /* Before the action reads them, so Browse, Unpack and the job all
          * see the same path. */
         expand_home_field(ui->archive_path);
@@ -2591,15 +2757,17 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
 #ifdef _WIN32
         if (desktop_shell(ui)) ui->pending_action = (xfu_shell_action)event->value;
 #endif
-    } else if (event->widget == ui->file_type && event->type == XXWIDGETS_EVENT_SELECT &&
-               !ui->job && !ui->closing) {
+    } else if (event->widget == ui->file_type && event->type == XXWIDGETS_EVENT_SELECT && !ui->job && !ui->closing) {
         xx_var value = {0};
         ui->busy_focus = ui->file_type;
-        if (xxwidgets_combobox_get_current(ui->file_type, &value) == XXWIDGETS_OK &&
-            value.type == XX_VAR_TYPE_UINT32) {
+        if (xxwidgets_combobox_get_current(ui->file_type, &value) == XXWIDGETS_OK && value.type == XX_VAR_TYPE_UINT32) {
             char *path = widget_text(ui->archive_path);
-            if (!path) { show_status(ui, "Cannot read the file path."); return; }
-            free(ui->pending_type_path); ui->pending_type_path = path;
+            if (!path) {
+                show_status(ui, "Cannot read the file path.");
+                return;
+            }
+            free(ui->pending_type_path);
+            ui->pending_type_path = path;
             {
                 int idx = -1;
                 if (xxwidgets_widget_get_value(ui->file_type, &idx) == XXWIDGETS_OK && idx >= 0 && (size_t)idx < ui->file_type_count && ui->offered_types) {
@@ -2622,18 +2790,15 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
             ui->pending_extract_selected = 0;
             ui->pending_command = XFU_COMMAND_LIST;
         }
-    } else if (event->type == XXWIDGETS_EVENT_CLOSE ||
-        (event->type == XXWIDGETS_EVENT_CLICK && event->widget == ui->quit)) {
+    } else if (event->type == XXWIDGETS_EVENT_CLOSE || (event->type == XXWIDGETS_EVENT_CLICK && event->widget == ui->quit)) {
         ui->closing = 1;
         if (ui->job) cancel_job(ui);
         else ui->running = 0;
-    } else if (event->widget == ui->advanced &&
-               (event->type == XXWIDGETS_EVENT_CHANGE || event->type == XXWIDGETS_EVENT_CLICK)) {
+    } else if (event->widget == ui->advanced && (event->type == XXWIDGETS_EVENT_CHANGE || event->type == XXWIDGETS_EVENT_CLICK)) {
         int checked = 0;
         if (xxwidgets_widget_get_value(ui->advanced, &checked) != XXWIDGETS_OK) return;
         change_advanced(ui, checked);
-    } else if (event->widget == ui->force &&
-               (event->type == XXWIDGETS_EVENT_CHANGE || event->type == XXWIDGETS_EVENT_CLICK)) {
+    } else if (event->widget == ui->force && (event->type == XXWIDGETS_EVENT_CHANGE || event->type == XXWIDGETS_EVENT_CLICK)) {
         int checked = 0;
         if (xxwidgets_widget_get_value(ui->force, &checked) != XXWIDGETS_OK) return;
         change_force(ui, checked);
@@ -2659,7 +2824,8 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
     } else if (event->type == XXWIDGETS_EVENT_CONTEXT_MENU && event->widget == ui->members) {
 #ifdef _WIN32
         if (desktop_shell(ui) && !ui->closing) {
-            ui->context_x = event->x; ui->context_y = event->y;
+            ui->context_x = event->x;
+            ui->context_y = event->y;
             ui->context_pending = 1;
         }
 #endif
@@ -2682,8 +2848,8 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
             else if (event->widget == ui->extract) ui->pending_command = XFU_COMMAND_EXTRACT;
             else if (event->widget == ui->test) ui->pending_command = XFU_COMMAND_TEST;
             else if (event->widget == ui->archive_browse) ui->browse_requested = 1;
-            if (event->widget == ui->open || event->widget == ui->extract || event->widget == ui->test ||
-                event->widget == ui->archive_browse) ui->busy_focus = event->widget;
+            if (event->widget == ui->open || event->widget == ui->extract || event->widget == ui->test || event->widget == ui->archive_browse)
+                ui->busy_focus = event->widget;
         }
     }
 }
@@ -2701,10 +2867,12 @@ static int select_source_member(ui_state *ui, size_t source)
          * Select by original source index so synthesized folders never stand
          * in for a real member's password metadata. */
         while (end && (name[end - 1] == '/' || name[end - 1] == '\\')) --end;
-        for (i = 0; i < end; ++i) if (name[i] == '/' || name[i] == '\\') parent = i + 1;
+        for (i = 0; i < end; ++i)
+            if (name[i] == '/' || name[i] == '\\') parent = i + 1;
         directory = (char *)malloc(parent + 1);
         if (!directory) return 0;
-        memcpy(directory, name, parent); directory[parent] = 0;
+        memcpy(directory, name, parent);
+        directory[parent] = 0;
         status = xxwidgets_archivebrowser_set_directory(ui->members, directory);
         free(directory);
         if (status != XXWIDGETS_OK) return 0;
@@ -2718,7 +2886,8 @@ static int select_source_member(ui_state *ui, size_t source)
         if (row == count) return 0;
     } else row = source;
     if (row > INT_MAX || xxwidgets_widget_set_value(ui->members, (int)row) != XXWIDGETS_OK) return 0;
-    update_metadata(ui); return 1;
+    update_metadata(ui);
+    return 1;
 }
 
 static int finish_password_retrieval(ui_state *ui, const ui_job *job)
@@ -2728,22 +2897,24 @@ static int finish_password_retrieval(ui_state *ui, const ui_job *job)
     if (source == SIZE_MAX) {
         for (source = 0; source < ui->listed_count; ++source)
             if (ui->listed_entries[source].embedded_password) break;
-    } else if (source >= ui->listed_count || !job->retrieve_member_name ||
-               strcmp(job->retrieve_member_name, ui->listed_entries[source].name)) {
-        show_status(ui, "Selected member changed; existing password input kept."); return 1;
+    } else if (source >= ui->listed_count || !job->retrieve_member_name || strcmp(job->retrieve_member_name, ui->listed_entries[source].name)) {
+        show_status(ui, "Selected member changed; existing password input kept.");
+        return 1;
     }
     if (source < ui->listed_count && !select_source_member(ui, source)) {
-        show_status(ui, "Cannot restore the selected member; existing password input kept."); return 2;
+        show_status(ui, "Cannot restore the selected member; existing password input kept.");
+        return 2;
     }
     if (source >= ui->listed_count || !ui->listed_entries[source].embedded_password) {
-        show_status(ui, job->retrieve_member == SIZE_MAX ? "No embedded password is available; existing input kept." :
-                    "The selected member has no embedded password; existing input kept.");
+        show_status(ui, job->retrieve_member == SIZE_MAX ? "No embedded password is available; existing input kept."
+                                                         : "The selected member has no embedded password; existing input kept.");
         return 1;
     }
     ui->password_manual = 0;
     if (!set_automatic_password(ui, ui->listed_entries[source].embedded_password)) {
         ui->password_manual = manual;
-        show_status(ui, "Cannot display the recovered password; existing input kept."); return 2;
+        show_status(ui, "Cannot display the recovered password; existing input kept.");
+        return 2;
     }
     show_status(ui, "Password retrieved; automatic member recovery restored.");
     return 0;
@@ -2756,43 +2927,50 @@ static void smoke_retrieval_finished(ui_state *ui, const ui_job *job, int result
     if (result == 0) {
         char *display, *field, *caption;
         int escaped = 0;
-        okay = okay && !ui->password_manual && ui->automatic_password && value &&
-            !strcmp(value, ui->automatic_password) && !job->request.password;
+        okay = okay && !ui->password_manual && ui->automatic_password && value && !strcmp(value, ui->automatic_password) && !job->request.password;
         if (job->retrieve_member != SIZE_MAX)
-            okay = okay && job->retrieve_member < ui->listed_count &&
-                ui->listed_entries[job->retrieve_member].embedded_password &&
-                !strcmp(value, ui->listed_entries[job->retrieve_member].embedded_password);
+            okay = okay && job->retrieve_member < ui->listed_count && ui->listed_entries[job->retrieve_member].embedded_password &&
+                   !strcmp(value, ui->listed_entries[job->retrieve_member].embedded_password);
         display = password_display(value ? value : "", &escaped);
-        field = widget_text(ui->password); caption = widget_text(ui->password_label);
-        okay = okay && display && field && caption && !strcmp(display, field) &&
-            !strcmp(caption, escaped ? "Password (escaped):" : "Password:");
-        free_password(display); free_password(field); free(caption);
+        field = widget_text(ui->password);
+        caption = widget_text(ui->password_label);
+        okay = okay && display && field && caption && !strcmp(display, field) && !strcmp(caption, escaped ? "Password (escaped):" : "Password:");
+        free_password(display);
+        free_password(field);
+        free(caption);
     } else {
         const char *expected = ui->password_smoke_stage ? "UI retrieve manual override ; \\x0A" : ui->password_smoke_expected;
-        okay = okay && ((value == NULL) == (expected == NULL)) &&
-            (!value || !strcmp(value, expected)) &&
-            (expected == NULL || ui->password_manual);
+        okay = okay && ((value == NULL) == (expected == NULL)) && (!value || !strcmp(value, expected)) && (expected == NULL || ui->password_manual);
     }
     free_password(value);
     if (ui->password_smoke_stage == 3 || ui->password_smoke_stage == 4) {
         /* The actual worker is deliberately invalidated/cancelled before
          * drain_job can consume it. Its result must not replace manual input. */
-        if (!okay || result != 2 ||
-            (ui->password_smoke_stage == 4 && !job->cancel_requested)) {
-            ui->exit_code = 2; ui->running = 0; return;
+        if (!okay || result != 2 || (ui->password_smoke_stage == 4 && !job->cancel_requested)) {
+            ui->exit_code = 2;
+            ui->running = 0;
+            return;
         }
         ui->password_smoke_stage = ui->password_smoke_stage == 3 ? 4 : 6;
         ui->retrieve_smoke_click = 1;
         return;
     }
     if (!okay || result == 2) {
-        ui->exit_code = job->result ? job->result : 2; ui->running = 0; return;
+        ui->exit_code = job->result ? job->result : 2;
+        ui->running = 0;
+        return;
     }
     if (result == 1 && !ui->password_smoke_stage) {
-        ui->exit_code = 1; ui->running = 0; return;
+        ui->exit_code = 1;
+        ui->running = 0;
+        return;
     }
     if (ui->password_smoke_stage == 6) {
-        if (result != 0) { ui->exit_code = 2; ui->running = 0; return; }
+        if (result != 0) {
+            ui->exit_code = 2;
+            ui->running = 0;
+            return;
+        }
         ui->password_smoke_stage = 2;
         ui->pending_command = XFU_COMMAND_TEST;
         return;
@@ -2808,9 +2986,10 @@ static void smoke_retrieval_finished(ui_state *ui, const ui_job *job, int result
             if ((!raw && !other) || (raw && other && !strcmp(raw, other))) break;
         }
         if (previous != source) continue;
-        if (!select_source_member(ui, source) ||
-            xxwidgets_widget_set_text(ui->password, "UI retrieve manual override ; \\x0A") != XXWIDGETS_OK) {
-            ui->exit_code = 2; ui->running = 0; return;
+        if (!select_source_member(ui, source) || xxwidgets_widget_set_text(ui->password, "UI retrieve manual override ; \\x0A") != XXWIDGETS_OK) {
+            ui->exit_code = 2;
+            ui->running = 0;
+            return;
         }
         password_edited(ui);
         ui->password_smoke_stage = 1;
@@ -2824,16 +3003,24 @@ static void smoke_retrieval_finished(ui_state *ui, const ui_job *job, int result
         size_t source;
         for (source = 0; source < ui->listed_count; ++source)
             if (ui->listed_entries[source].embedded_password) break;
-        if (source == ui->listed_count) { ui->exit_code = 2; ui->running = 0; return; }
+        if (source == ui->listed_count) {
+            ui->exit_code = 2;
+            ui->running = 0;
+            return;
+        }
         if (!select_source_member(ui, source)) {
-            ui->exit_code = 2; ui->running = 0; return;
+            ui->exit_code = 2;
+            ui->running = 0;
+            return;
         }
         ui->password_smoke_stage = 5;
         ui->retrieve_smoke_click = 1;
         return;
     }
     if (xxwidgets_widget_set_text(ui->password, "UI retrieve manual override ; \\x0A") != XXWIDGETS_OK) {
-        ui->exit_code = 2; ui->running = 0; return;
+        ui->exit_code = 2;
+        ui->running = 0;
+        return;
     }
     password_edited(ui);
     ui->password_smoke_stage = 3;
@@ -2852,15 +3039,13 @@ static int smoke_password_listing(ui_state *ui)
         for (i = 0; i < ui->listed_count; ++i)
             if (ui->listed_entries[i].embedded_password) return 0;
         if (!password_snapshot(ui, &value)) return 0;
-        i = (value == NULL) == (ui->password_smoke_expected == NULL) &&
-            (!value || !strcmp(value, ui->password_smoke_expected));
-        free_password(value); return i != 0;
+        i = (value == NULL) == (ui->password_smoke_expected == NULL) && (!value || !strcmp(value, ui->password_smoke_expected));
+        free_password(value);
+        return i != 0;
     }
     /* The normal listing replacement must reset navigation to archive root,
      * even when the preceding pass selected a nested member. */
-    if (ui->password_smoke_stage == 1 &&
-        xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER &&
-        xxwidgets_archivebrowser_directory(ui->members)[0]) return 0;
+    if (ui->password_smoke_stage == 1 && xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER && xxwidgets_archivebrowser_directory(ui->members)[0]) return 0;
     for (i = 0; i < ui->listed_count; ++i)
         if (ui->listed_entries[i].embedded_password) have_password = 1;
     for (i = 0; i < ui->listed_count; ++i) {
@@ -2872,18 +3057,21 @@ static int smoke_password_listing(ui_state *ui)
             /* Clear members/directories may coexist with protected payloads.
              * They have no replacement credential; retain the current auto
              * value. An entirely clear archive must have no auto value. */
-            if ((!have_password && value) ||
-                (value && (!ui->automatic_password || strcmp(value, ui->automatic_password)))) {
-                free_password(value); return 0;
+            if ((!have_password && value) || (value && (!ui->automatic_password || strcmp(value, ui->automatic_password)))) {
+                free_password(value);
+                return 0;
             }
-            free_password(value); value = NULL;
+            free_password(value);
+            value = NULL;
             continue;
         }
         display = password_display(raw, &escaped);
         field = widget_text(ui->password);
         same = value && display && field && !strcmp(value, raw) && !strcmp(field, display);
-        free_password(value); value = NULL;
-        free_password(display); free_password(field);
+        free_password(value);
+        value = NULL;
+        free_password(display);
+        free_password(field);
         if (!same) return 0;
     }
     if (ui->password_smoke_stage == 0) {
@@ -2892,26 +3080,36 @@ static int smoke_password_listing(ui_state *ui)
         xxwidgets_event edit = {.type = XXWIDGETS_EVENT_CHANGE, .widget = ui->password};
         xxwidgets_event change = {.type = XXWIDGETS_EVENT_CHANGE, .widget = ui->archive_path};
         int okay = 1;
-        if (!archive || xxwidgets_widget_set_text(ui->password, manual) != XXWIDGETS_OK) { free(archive); return 0; }
+        if (!archive || xxwidgets_widget_set_text(ui->password, manual) != XXWIDGETS_OK) {
+            free(archive);
+            return 0;
+        }
         on_event(ui->app, &edit, ui);
         for (i = 0; i < ui->listed_count; ++i) {
-            if (!select_source_member(ui, i) || !password_snapshot(ui, &value)) { okay = 0; break; }
+            if (!select_source_member(ui, i) || !password_snapshot(ui, &value)) {
+                okay = 0;
+                break;
+            }
             if (!value || strcmp(value, manual)) okay = 0;
-            free_password(value); value = NULL;
+            free_password(value);
+            value = NULL;
             if (!okay) break;
         }
         /* Return from the explicit manual-edit test to automatic mode before
          * switching sources. This is test setup, not a user-facing reset flow. */
         ui->password_manual = 0;
         if (!set_automatic_password(ui, ui->listed_count ? ui->listed_entries[0].embedded_password : NULL) ||
-            xxwidgets_widget_set_text(ui->archive_path, "password-smoke-other.zip") != XXWIDGETS_OK) okay = 0;
+            xxwidgets_widget_set_text(ui->archive_path, "password-smoke-other.zip") != XXWIDGETS_OK)
+            okay = 0;
         on_event(ui->app, &change, ui);
         if (!password_snapshot(ui, &value) || value || ui->automatic_password || ui->password_listed_archive) okay = 0;
-        free_password(value); value = NULL;
+        free_password(value);
+        value = NULL;
         if (xxwidgets_widget_set_text(ui->archive_path, archive) != XXWIDGETS_OK) okay = 0;
         on_event(ui->app, &change, ui);
         if (!password_snapshot(ui, &value) || value) okay = 0;
-        free_password(value); free(archive);
+        free_password(value);
+        free(archive);
         return okay;
     }
     return 1;
@@ -2920,33 +3118,39 @@ static int smoke_password_listing(ui_state *ui)
 static xxwidgets_widget *create(ui_state *ui, xxwidgets_kind kind, const char *text)
 {
     xxwidgets_widget *widget = NULL;
-    xxwidgets_rect initial = { 1, 1, 10, 1 };
-    if (xxwidgets_widget_create(ui->app, ui->window, kind, text, initial, &widget) != XXWIDGETS_OK)
-        return NULL;
+    xxwidgets_rect initial = {1, 1, 10, 1};
+    if (xxwidgets_widget_create(ui->app, ui->window, kind, text, initial, &widget) != XXWIDGETS_OK) return NULL;
     return widget;
 }
 
 static int create_ui(ui_state *ui, const char *archive, const char *output)
 {
-    xxwidgets_rect bounds = { 0, 0, 78, 23 };
-    xxwidgets_config config = { ui->backend, on_event, ui };
+    xxwidgets_rect bounds = {0, 0, 78, 23};
+    xxwidgets_config config = {ui->backend, on_event, ui};
     if (ui->backend == XXWIDGETS_BACKEND_NATIVE) {
-        bounds.x = bounds.y = 3; bounds.width = 112; bounds.height = 37;
-        if (desktop_shell(ui)) { bounds.width = 160; bounds.height = 36; }
+        bounds.x = bounds.y = 3;
+        bounds.width = 112;
+        bounds.height = 37;
+        if (desktop_shell(ui)) {
+            bounds.width = 160;
+            bounds.height = 36;
+        }
     }
     if (xxwidgets_app_create(&config, &ui->app) != XXWIDGETS_OK) return 0;
-    if (xxwidgets_widget_create(ui->app, NULL, XXWIDGETS_WINDOW,
-        "XFileUnpacker", bounds, &ui->window) != XXWIDGETS_OK) return 0;
+    if (xxwidgets_widget_create(ui->app, NULL, XXWIDGETS_WINDOW, "XFileUnpacker", bounds, &ui->window) != XXWIDGETS_OK) return 0;
 #ifndef _WIN32
     /* The classic layout follows RESIZE, so the window may shrink to its
      * minimum. Should the backend refuse, the window only loses that limit. */
-    if (ui->backend == XXWIDGETS_BACKEND_NATIVE)
-        (void)xxwidgets_window_set_minimum_size(ui->window, CLASSIC_MIN_COLUMNS, NATIVE_MIN_ROWS);
+    if (ui->backend == XXWIDGETS_BACKEND_NATIVE) (void)xxwidgets_window_set_minimum_size(ui->window, CLASSIC_MIN_COLUMNS, NATIVE_MIN_ROWS);
 #endif
     if (!create_about(ui)) return 0;
     if (ui->smoke) xxwidgets_widget_set_visible(ui->window, 0);
     if (ui->backend == XXWIDGETS_BACKEND_NATIVE) xfu_set_application_icon(ui->window);
-#define CONTROL(field, kind, text) do { ui->field = create(ui, kind, text); if (!ui->field) return 0; } while (0)
+#define CONTROL(field, kind, text)          \
+    do {                                    \
+        ui->field = create(ui, kind, text); \
+        if (!ui->field) return 0;           \
+    } while (0)
     CONTROL(archive_label, XXWIDGETS_LABEL, "Archive:");
     CONTROL(archive_path, XXWIDGETS_EDIT, archive);
     CONTROL(archive_browse, XXWIDGETS_BUTTON, "Browse...");
@@ -2977,9 +3181,9 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
     CONTROL(log_label, XXWIDGETS_LABEL, "Operation log");
     CONTROL(log, XXWIDGETS_LISTBOX, "");
     /* Escape quits only the terminal edition; a desktop window closes normally. */
-    CONTROL(help, XXWIDGETS_LABEL, ui->backend == XXWIDGETS_BACKEND_NATIVE ?
-        "Tab: next control | Enter: activate | Arrows: select" :
-        "Tab: next control | Enter: activate | Arrows: select | Esc: quit");
+    CONTROL(help, XXWIDGETS_LABEL,
+            ui->backend == XXWIDGETS_BACKEND_NATIVE ? "Tab: next control | Enter: activate | Arrows: select"
+                                                    : "Tab: next control | Enter: activate | Arrows: select | Esc: quit");
     if (desktop_shell(ui)) {
         CONTROL(copy_path, XXWIDGETS_BUTTON, "Copy path");
         CONTROL(info, XXWIDGETS_BUTTON, "Info");
@@ -2995,13 +3199,14 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
 #undef CONTROL
     {
         ui_job initial = {0};
-        initial.archive_path = ""; initial.selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
+        initial.archive_path = "";
+        initial.selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
         if (!populate_file_types(ui, &initial)) return 0;
     }
     if (xxwidgets_widget_set_value(ui->advanced, ui->advanced_visible) != XXWIDGETS_OK) return 0;
     if (xxwidgets_widget_set_value(ui->force, ui->force_enabled) != XXWIDGETS_OK) return 0;
-    if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER &&
-        xxwidgets_archivebrowser_set_advanced(ui->members, ui->advanced_visible) != XXWIDGETS_OK) return 0;
+    if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER && xxwidgets_archivebrowser_set_advanced(ui->members, ui->advanced_visible) != XXWIDGETS_OK)
+        return 0;
     layout(ui, bounds.width, bounds.height);
     ui->window_columns = bounds.width;
     ui->window_rows = bounds.height;
@@ -3018,11 +3223,8 @@ static int create_ui(ui_state *ui, const char *archive, const char *output)
 #ifdef _WIN32
     if (desktop_shell(ui)) {
         xfu_shell_button buttons[] = {
-            {ui->open, XFU_SHELL_OPEN}, {ui->extract, XFU_SHELL_EXTRACT},
-            {ui->test, XFU_SHELL_TEST}, {ui->copy_path, XFU_SHELL_COPY}, {ui->info, XFU_SHELL_INFO}
-        };
-        if (!xfu_native_shell_attach(ui->window, buttons, sizeof(buttons) / sizeof(buttons[0]),
-                                     native_action, ui, &ui->shell)) return 0;
+            {ui->open, XFU_SHELL_OPEN}, {ui->extract, XFU_SHELL_EXTRACT}, {ui->test, XFU_SHELL_TEST}, {ui->copy_path, XFU_SHELL_COPY}, {ui->info, XFU_SHELL_INFO}};
+        if (!xfu_native_shell_attach(ui->window, buttons, sizeof(buttons) / sizeof(buttons[0]), native_action, ui, &ui->shell)) return 0;
         resize_native(ui);
     }
 #endif
@@ -3087,13 +3289,10 @@ static int smoke_console_create(smoke_console *console)
     }
     console->allocated = 1;
     if (GetConsoleWindow()) ShowWindow(GetConsoleWindow(), SW_HIDE);
-    console->input = CreateFileW(L"CONIN$", GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    console->output = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    console->input = CreateFileW(L"CONIN$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    console->output = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     if (console->input == INVALID_HANDLE_VALUE || console->output == INVALID_HANDLE_VALUE) return 0;
-    return SetStdHandle(STD_INPUT_HANDLE, console->input) &&
-           SetStdHandle(STD_OUTPUT_HANDLE, console->output) && FlushConsoleInputBuffer(console->input);
+    return SetStdHandle(STD_INPUT_HANDLE, console->input) && SetStdHandle(STD_OUTPUT_HANDLE, console->output) && FlushConsoleInputBuffer(console->input);
 }
 
 static void smoke_console_destroy(smoke_console *console)
@@ -3117,7 +3316,10 @@ static BOOL CALLBACK smoke_find_about(HWND window, LPARAM result)
 {
     wchar_t title[80];
     GetWindowTextW(window, title, 80);
-    if (!wcscmp(title, L"About XFileUnpacker")) { *(HWND *)result = window; return FALSE; }
+    if (!wcscmp(title, L"About XFileUnpacker")) {
+        *(HWND *)result = window;
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -3126,16 +3328,20 @@ static VOID CALLBACK smoke_close_about(HWND unused, UINT message, UINT_PTR timer
     about_smoke_state *state = (about_smoke_state *)timer;
     HWND dialog = NULL;
     wchar_t body[2048];
-    (void)unused; (void)message; (void)time;
+    (void)unused;
+    (void)message;
+    (void)time;
     EnumThreadWindows(GetCurrentThreadId(), smoke_find_about, (LPARAM)&dialog);
     if (!dialog) {
-        if (++state->ticks >= 100) { KillTimer(state->owner, timer); xxwidgets_app_quit(state->app, 2); }
+        if (++state->ticks >= 100) {
+            KillTimer(state->owner, timer);
+            xxwidgets_app_quit(state->app, 2);
+        }
         return;
     }
-    state->valid = !IsWindowEnabled(state->owner) && GetWindow(dialog, GW_OWNER) == state->owner &&
-        GetWindowTextW(GetDlgItem(dialog, 101), body, 2048) && wcsstr(body, L"XFileUnpacker") &&
-        wcsstr(body, L"Version ") && wcsstr(body, L"MIT License") && GetDlgItem(dialog, 102) &&
-        SendMessageW(dialog, WM_GETICON, ICON_BIG, 0);
+    state->valid = !IsWindowEnabled(state->owner) && GetWindow(dialog, GW_OWNER) == state->owner && GetWindowTextW(GetDlgItem(dialog, 101), body, 2048) &&
+                   wcsstr(body, L"XFileUnpacker") && wcsstr(body, L"Version ") && wcsstr(body, L"MIT License") && GetDlgItem(dialog, 102) &&
+                   SendMessageW(dialog, WM_GETICON, ICON_BIG, 0);
     KillTimer(state->owner, timer);
     PostMessageW(dialog, WM_CLOSE, 0, 0);
 }
@@ -3144,7 +3350,10 @@ static BOOL CALLBACK smoke_find_formats(HWND window, LPARAM result)
 {
     wchar_t title[80];
     GetWindowTextW(window, title, 80);
-    if (!wcscmp(title, L"Supported file types")) { *(HWND *)result = window; return FALSE; }
+    if (!wcscmp(title, L"Supported file types")) {
+        *(HWND *)result = window;
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -3152,7 +3361,10 @@ static BOOL CALLBACK smoke_find_copy_button(HWND window, LPARAM result)
 {
     wchar_t text[40];
     GetWindowTextW(window, text, 40);
-    if (!wcscmp(text, L"Copy all")) { *(HWND *)result = window; return FALSE; }
+    if (!wcscmp(text, L"Copy all")) {
+        *(HWND *)result = window;
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -3164,10 +3376,15 @@ static VOID CALLBACK smoke_close_formats(HWND unused, UINT message, UINT_PTR tim
     int length;
     size_t lines = 0, count = 0, expected_lines = 0;
     char *expected;
-    (void)unused; (void)message; (void)time;
+    (void)unused;
+    (void)message;
+    (void)time;
     EnumThreadWindows(GetCurrentThreadId(), smoke_find_formats, (LPARAM)&dialog);
     if (!dialog) {
-        if (++state->ticks >= 100) { KillTimer(state->owner, timer); xxwidgets_app_quit(state->app, 2); }
+        if (++state->ticks >= 100) {
+            KillTimer(state->owner, timer);
+            xxwidgets_app_quit(state->app, 2);
+        }
         return;
     }
     edit = GetDlgItem(dialog, 101);
@@ -3178,17 +3395,17 @@ static VOID CALLBACK smoke_close_formats(HWND unused, UINT message, UINT_PTR tim
     if (body && expected && GetWindowTextW(edit, body, length + 1)) {
         wchar_t *cursor;
         const char *expected_cursor;
-        for (cursor = body; *cursor; ++cursor) if (*cursor == L'\n') ++lines;
+        for (cursor = body; *cursor; ++cursor)
+            if (*cursor == L'\n') ++lines;
         for (expected_cursor = expected; *expected_cursor; ++expected_cursor)
             if (*expected_cursor == '\n') ++expected_lines;
-        state->valid = !IsWindowEnabled(state->owner) && GetWindow(dialog, GW_OWNER) == state->owner &&
-            copy && IsWindowEnabled(copy) && (GetWindowLongPtrW(edit, GWL_STYLE) & ES_READONLY) &&
-            wcsstr(body, L"Supported file types (xxfclib): ") && wcsstr(body, L"CPX4") &&
-            wcsstr(body, L"TAR.GZ") && wcsstr(body, L"Xamarin compressed assembly (XALZ)") &&
-            count > 1200 && wcsstr(body, L"Archive creation: 7z, ZIP, TAR, GZIP, BZIP2, XZ, stored WIM") &&
-            lines == expected_lines;
+        state->valid = !IsWindowEnabled(state->owner) && GetWindow(dialog, GW_OWNER) == state->owner && copy && IsWindowEnabled(copy) &&
+                       (GetWindowLongPtrW(edit, GWL_STYLE) & ES_READONLY) && wcsstr(body, L"Supported file types (xxfclib): ") && wcsstr(body, L"CPX4") &&
+                       wcsstr(body, L"TAR.GZ") && wcsstr(body, L"Xamarin compressed assembly (XALZ)") && count > 1200 &&
+                       wcsstr(body, L"Archive creation: 7z, ZIP, TAR, GZIP, BZIP2, XZ, stored WIM") && lines == expected_lines;
     }
-    free(body); free(expected);
+    free(body);
+    free(expected);
     KillTimer(state->owner, timer);
     PostMessageW(dialog, WM_CLOSE, 0, 0);
 }
@@ -3203,7 +3420,10 @@ static BOOL CALLBACK smoke_find_encryption(HWND window, LPARAM data)
 {
     wchar_t title[80];
     GetWindowTextW(window, title, 80);
-    if (!wcscmp(title, L"Encrypted archive")) { *(HWND *)data = window; return FALSE; }
+    if (!wcscmp(title, L"Encrypted archive")) {
+        *(HWND *)data = window;
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -3211,8 +3431,7 @@ static BOOL CALLBACK smoke_encryption_text(HWND window, LPARAM data)
 {
     wchar_t text[1024];
     GetWindowTextW(window, text, 1024);
-    if (wcsstr(text, L"password") && (wcsstr(text, L"encrypted") || wcsstr(text, L"unlock")))
-        *(int *)data = 1;
+    if (wcsstr(text, L"password") && (wcsstr(text, L"encrypted") || wcsstr(text, L"unlock"))) *(int *)data = 1;
     return TRUE;
 }
 
@@ -3221,20 +3440,23 @@ static VOID CALLBACK smoke_ack_encryption_native(HWND window, UINT message, UINT
     encryption_smoke_ack *ack = (encryption_smoke_ack *)timer;
     HWND dialog = NULL;
     int text = 0;
-    (void)window; (void)message; (void)time;
+    (void)window;
+    (void)message;
+    (void)time;
     if (!ack->active) return;
     EnumThreadWindows(ack->ui_thread, smoke_find_encryption, (LPARAM)&dialog);
     if (!dialog) {
         if (++ack->ticks >= 300) {
-            encryption_smoke_trace("native notice not found"); KillTimer(ack->owner, timer); ack->active = 0;
+            encryption_smoke_trace("native notice not found");
+            KillTimer(ack->owner, timer);
+            ack->active = 0;
         }
         return;
     }
     EnumChildWindows(dialog, smoke_encryption_text, (LPARAM)&text);
     ack->seen = 1;
     ack->valid = text && !IsWindowEnabled(ack->owner) && GetWindow(dialog, GW_OWNER) == ack->owner;
-    encryption_smoke_trace("native notice seen body=%d modal=%d owner=%d", text,
-        !IsWindowEnabled(ack->owner), GetWindow(dialog, GW_OWNER) == ack->owner);
+    encryption_smoke_trace("native notice seen body=%d modal=%d owner=%d", text, !IsWindowEnabled(ack->owner), GetWindow(dialog, GW_OWNER) == ack->owner);
     KillTimer(ack->owner, timer);
     ack->active = 0;
     PostMessageW(dialog, WM_COMMAND, IDOK, 0);
@@ -3246,14 +3468,14 @@ static DWORD WINAPI smoke_ack_encryption(LPVOID data)
     unsigned ticks;
     for (ticks = 0; ticks < 300; ++ticks) {
         {
-            HANDLE output = CreateFileW(L"CONOUT$", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                NULL, OPEN_EXISTING, 0, NULL);
+            HANDLE output = CreateFileW(L"CONOUT$", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
             CONSOLE_SCREEN_BUFFER_INFO info;
             int title = 0, password = 0;
             if (GetConsoleScreenBufferInfo(output, &info)) {
                 SHORT row;
                 for (row = info.srWindow.Top; row <= info.srWindow.Bottom; ++row) {
-                    wchar_t line[501]; DWORD read_count, width = info.srWindow.Right - info.srWindow.Left + 1;
+                    wchar_t line[501];
+                    DWORD read_count, width = info.srWindow.Right - info.srWindow.Left + 1;
                     COORD at = {info.srWindow.Left, row};
                     if (width > 500) width = 500;
                     if (!ReadConsoleOutputCharacterW(output, line, width, at, &read_count)) continue;
@@ -3264,13 +3486,15 @@ static DWORD WINAPI smoke_ack_encryption(LPVOID data)
             }
             if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
             if (title || ticks == 299) {
-                INPUT_RECORD records[2] = {{0}, {0}}; DWORD written;
+                INPUT_RECORD records[2] = {{0}, {0}};
+                DWORD written;
                 records[0].EventType = records[1].EventType = KEY_EVENT;
                 records[0].Event.KeyEvent.bKeyDown = TRUE;
                 records[0].Event.KeyEvent.wRepeatCount = records[1].Event.KeyEvent.wRepeatCount = 1;
                 records[0].Event.KeyEvent.wVirtualKeyCode = records[1].Event.KeyEvent.wVirtualKeyCode = VK_RETURN;
                 records[0].Event.KeyEvent.uChar.UnicodeChar = records[1].Event.KeyEvent.uChar.UnicodeChar = L'\r';
-                ack->seen = title; ack->valid = title && password;
+                ack->seen = title;
+                ack->valid = title && password;
                 encryption_smoke_trace("TUI notice seen=%d password=%d ticks=%u", title, password, ticks);
                 if (!WriteConsoleInputW(GetStdHandle(STD_INPUT_HANDLE), records, 2, &written) || written != 2) ack->valid = 0;
                 return 0;
@@ -3292,10 +3516,14 @@ static int smoke_finish_encryption_job(ui_state *ui)
     HANDLE acknowledger;
     memset(&ack, 0, sizeof(ack));
     ack.owner = (HWND)xxwidgets_widget_native_handle(ui->window);
-    ack.ui_thread = GetCurrentThreadId(); ack.native = desktop_shell(ui);
+    ack.ui_thread = GetCurrentThreadId();
+    ack.native = desktop_shell(ui);
     if (ack.native) {
         ack.active = 1;
-        if (!SetTimer(ack.owner, (UINT_PTR)&ack, 20, smoke_ack_encryption_native)) { ack.active = 0; return 0; }
+        if (!SetTimer(ack.owner, (UINT_PTR)&ack, 20, smoke_ack_encryption_native)) {
+            ack.active = 0;
+            return 0;
+        }
         drain_job(ui);
         KillTimer(ack.owner, (UINT_PTR)&ack);
         ack.active = 0;
@@ -3305,7 +3533,8 @@ static int smoke_finish_encryption_job(ui_state *ui)
     acknowledger = CreateThread(NULL, 0, smoke_ack_encryption, &ack, 0, NULL);
     if (!acknowledger) return 0;
     drain_job(ui);
-    WaitForSingleObject(acknowledger, INFINITE); CloseHandle(acknowledger);
+    WaitForSingleObject(acknowledger, INFINITE);
+    CloseHandle(acknowledger);
     encryption_smoke_trace("TUI drain finished seen=%d valid=%d", ack.seen, ack.valid);
     return ack.seen && ack.valid;
 #else
@@ -3323,49 +3552,77 @@ static int smoke_encryption(ui_state *ui)
     unsigned before = ui->encryption_notices;
     int okay;
     encryption_smoke_trace("begin backend=%d", (int)ui->backend);
-    if (!password_archive_changed(ui, "encryption-smoke.arc") ||
-        xxwidgets_widget_set_text(ui->archive_path, "encryption-smoke.arc") != XXWIDGETS_OK ||
-        xxwidgets_widget_set_visible(ui->window, 1) != XXWIDGETS_OK) { encryption_smoke_trace("FAILED initialize widgets"); return 0; }
+    if (!password_archive_changed(ui, "encryption-smoke.arc") || xxwidgets_widget_set_text(ui->archive_path, "encryption-smoke.arc") != XXWIDGETS_OK ||
+        xxwidgets_widget_set_visible(ui->window, 1) != XXWIDGETS_OK) {
+        encryption_smoke_trace("FAILED initialize widgets");
+        return 0;
+    }
     job = (ui_job *)calloc(1, sizeof(*job));
-    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    if (!job || !mutex_init(&job->mutex)) {
+        free(job);
+        return 0;
+    }
     job->archive_path = copy_text("encryption-smoke.arc");
-    if (!job->archive_path) { job_destroy(job); return 0; }
-    job->request.command = XFU_COMMAND_LIST; job->result = 2; job->done = 1;
-    encrypted.name = "encrypted.txt"; encrypted.is_encrypted = true;
+    if (!job->archive_path) {
+        job_destroy(job);
+        return 0;
+    }
+    job->request.command = XFU_COMMAND_LIST;
+    job->result = 2;
+    job->done = 1;
+    encrypted.name = "encrypted.txt";
+    encrypted.is_encrypted = true;
     plain.name = "plain.txt";
-    job_entry(job, &encrypted); job_entry(job, &plain);
+    job_entry(job, &encrypted);
+    job_entry(job, &plain);
     job_encryption(job, XFU_ENCRYPTION_DETECTED, "encrypted.txt");
     job_encryption(job, XFU_ENCRYPTION_PASSWORD_REQUIRED, NULL);
     job_encryption(job, XFU_ENCRYPTION_PASSWORD_REQUIRED, "encrypted.txt");
-    ui->job = job; set_busy(ui, 1);
+    ui->job = job;
+    set_busy(ui, 1);
     job->done = 0;
     drain_job(ui);
-    if (ui->job != job || !ui->archive_encrypted || ui->encryption_notices != before) { encryption_smoke_trace("FAILED early banner"); return 0; }
+    if (ui->job != job || !ui->archive_encrypted || ui->encryption_notices != before) {
+        encryption_smoke_trace("FAILED early banner");
+        return 0;
+    }
     encryption_smoke_trace("early banner passed; completing blocked listing");
     job->done = 1;
-    if (!smoke_finish_encryption_job(ui)) { encryption_smoke_trace("FAILED blocked notice acknowledgement"); return 0; }
+    if (!smoke_finish_encryption_job(ui)) {
+        encryption_smoke_trace("FAILED blocked notice acknowledgement");
+        return 0;
+    }
     status = widget_text(ui->status);
-    okay = !ui->job && !ui->busy && ui->archive_encrypted && ui->encryption_notices == before + 1 &&
-        xxwidgets_widget_has_focus(ui->password) == 1 && status && strstr(status, "[Encrypted]");
+    okay = !ui->job && !ui->busy && ui->archive_encrypted && ui->encryption_notices == before + 1 && xxwidgets_widget_has_focus(ui->password) == 1 && status &&
+           strstr(status, "[Encrypted]");
     free(status);
-    if (!okay || !select_source_member(ui, 0)) { encryption_smoke_trace("FAILED notice count/focus/banner or encrypted selection"); return 0; }
+    if (!okay || !select_source_member(ui, 0)) {
+        encryption_smoke_trace("FAILED notice count/focus/banner or encrypted selection");
+        return 0;
+    }
     encryption_smoke_trace("blocked notice and Password focus passed");
     metadata = widget_text(ui->metadata);
-    okay = metadata && strstr(metadata, "Encrypted | "); free(metadata);
+    okay = metadata && strstr(metadata, "Encrypted | ");
+    free(metadata);
     if (xxwidgets_widget_kind(ui->members) == XXWIDGETS_ARCHIVEBROWSER) {
-        xxwidgets_archive_browser_entry entry; size_t source;
-        okay = okay && xxwidgets_archivebrowser_get_selection(ui->members, &source, &entry) == XXWIDGETS_OK &&
-            entry.attributes && strstr(entry.attributes, "Encrypted");
+        xxwidgets_archive_browser_entry entry;
+        size_t source;
+        okay = okay && xxwidgets_archivebrowser_get_selection(ui->members, &source, &entry) == XXWIDGETS_OK && entry.attributes && strstr(entry.attributes, "Encrypted");
     }
-    if (!okay || !select_source_member(ui, 1)) { encryption_smoke_trace("FAILED encrypted metadata/attributes or plain selection"); return 0; }
+    if (!okay || !select_source_member(ui, 1)) {
+        encryption_smoke_trace("FAILED encrypted metadata/attributes or plain selection");
+        return 0;
+    }
     metadata = widget_text(ui->metadata);
-    okay = metadata && !strstr(metadata, "Encrypted | "); free(metadata);
+    okay = metadata && !strstr(metadata, "Encrypted | ");
+    free(metadata);
     if (okay) {
         ui_job replacement = {0};
         char *previous_path = ui->file_types_path;
         ui->file_types_path = copy_text("encryption-smoke.arc");
         replacement.archive_path = ui->file_types_path;
-        replacement.request.command = XFU_COMMAND_TEST; replacement.read_all = 1;
+        replacement.request.command = XFU_COMMAND_TEST;
+        replacement.read_all = 1;
         replacement.entry_count = ui->listed_count;
         replacement.entries = (xfu_entry *)malloc(ui->listed_count * sizeof(*replacement.entries));
         okay = ui->file_types_path && replacement.entries;
@@ -3375,59 +3632,110 @@ static int smoke_encryption(ui_state *ui)
             replacement.entries[0].is_encrypted = false;
             okay = okay && !keep_listing(ui, &replacement, 0);
         }
-        free(replacement.entries); free(ui->file_types_path); ui->file_types_path = previous_path;
+        free(replacement.entries);
+        free(ui->file_types_path);
+        ui->file_types_path = previous_path;
     }
-    if (!okay || !password_archive_changed(ui, "plaintext-smoke.arc")) { encryption_smoke_trace("FAILED mixed metadata or changed-encryption listing invalidation"); return 0; }
+    if (!okay || !password_archive_changed(ui, "plaintext-smoke.arc")) {
+        encryption_smoke_trace("FAILED mixed metadata or changed-encryption listing invalidation");
+        return 0;
+    }
     encryption_smoke_trace("mixed metadata and changed-encryption listing passed");
-    status = widget_text(ui->status); label = widget_text(ui->members_label);
+    status = widget_text(ui->status);
+    label = widget_text(ui->members_label);
     okay = !ui->archive_encrypted && status && !strstr(status, "Encrypted") && label && !strstr(label, "encrypted");
-    free(status); free(label);
-    if (!okay) { encryption_smoke_trace("FAILED plaintext archive reset"); return 0; }
+    free(status);
+    free(label);
+    if (!okay) {
+        encryption_smoke_trace("FAILED plaintext archive reset");
+        return 0;
+    }
     /* An ordinary plain job must not produce a notice or an encrypted marker. */
     job = (ui_job *)calloc(1, sizeof(*job));
-    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    if (!job || !mutex_init(&job->mutex)) {
+        free(job);
+        return 0;
+    }
     job->archive_path = copy_text("plaintext-smoke.arc");
-    if (!job->archive_path) { job_destroy(job); return 0; }
+    if (!job->archive_path) {
+        job_destroy(job);
+        return 0;
+    }
     xxwidgets_widget_set_text(ui->archive_path, job->archive_path);
-    job->done = 1; job->request.command = XFU_COMMAND_LIST;
-    ui->job = job; drain_job(ui);
+    job->done = 1;
+    job->request.command = XFU_COMMAND_LIST;
+    ui->job = job;
+    drain_job(ui);
     okay = !ui->job && !ui->archive_encrypted && ui->encryption_notices == before + 1;
-    if (!okay) { encryption_smoke_trace("FAILED plaintext job suppression"); return 0; }
+    if (!okay) {
+        encryption_smoke_trace("FAILED plaintext job suppression");
+        return 0;
+    }
     encryption_smoke_trace("plaintext reset/job passed; completing readable encrypted listing");
     /* Listing readable encrypted members also needs the informational notice
      * when the user has not supplied or recovered a usable password. */
     job = (ui_job *)calloc(1, sizeof(*job));
-    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    if (!job || !mutex_init(&job->mutex)) {
+        free(job);
+        return 0;
+    }
     job->archive_path = copy_text("plaintext-smoke.arc");
-    if (!job->archive_path) { job_destroy(job); return 0; }
-    job->done = 1; job->request.command = XFU_COMMAND_LIST;
+    if (!job->archive_path) {
+        job_destroy(job);
+        return 0;
+    }
+    job->done = 1;
+    job->request.command = XFU_COMMAND_LIST;
     job_entry(job, &encrypted);
     job_encryption(job, XFU_ENCRYPTION_DETECTED, encrypted.name);
-    ui->job = job; set_busy(ui, 1);
-    if (!smoke_finish_encryption_job(ui) || ui->encryption_notices != before + 2 ||
-        xxwidgets_widget_has_focus(ui->password) != 1) { encryption_smoke_trace("FAILED readable encrypted notice/focus"); return 0; }
+    ui->job = job;
+    set_busy(ui, 1);
+    if (!smoke_finish_encryption_job(ui) || ui->encryption_notices != before + 2 || xxwidgets_widget_has_focus(ui->password) != 1) {
+        encryption_smoke_trace("FAILED readable encrypted notice/focus");
+        return 0;
+    }
     encryption_smoke_trace("readable encrypted notice passed");
     /* A supplied password suppresses only that informational notice. */
     job = (ui_job *)calloc(1, sizeof(*job));
-    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    if (!job || !mutex_init(&job->mutex)) {
+        free(job);
+        return 0;
+    }
     job->archive_path = copy_text("plaintext-smoke.arc");
-    if (!job->archive_path) { job_destroy(job); return 0; }
-    job->done = 1; job->request.command = XFU_COMMAND_LIST; job->request.password = "public-smoke-password";
+    if (!job->archive_path) {
+        job_destroy(job);
+        return 0;
+    }
+    job->done = 1;
+    job->request.command = XFU_COMMAND_LIST;
+    job->request.password = "public-smoke-password";
     job_encryption(job, XFU_ENCRYPTION_DETECTED, NULL);
-    ui->job = job; drain_job(ui);
-    if (ui->encryption_notices != before + 2) { encryption_smoke_trace("FAILED supplied password suppression"); return 0; }
+    ui->job = job;
+    drain_job(ui);
+    if (ui->encryption_notices != before + 2) {
+        encryption_smoke_trace("FAILED supplied password suppression");
+        return 0;
+    }
     /* Cancellation cannot open a password dialog, even with a pending event. */
     job = (ui_job *)calloc(1, sizeof(*job));
-    if (!job || !mutex_init(&job->mutex)) { free(job); return 0; }
+    if (!job || !mutex_init(&job->mutex)) {
+        free(job);
+        return 0;
+    }
     job->archive_path = copy_text("plaintext-smoke.arc");
-    if (!job->archive_path) { job_destroy(job); return 0; }
-    job->done = job->cancel_requested = 1; job->result = 1; job->request.command = XFU_COMMAND_TEST;
+    if (!job->archive_path) {
+        job_destroy(job);
+        return 0;
+    }
+    job->done = job->cancel_requested = 1;
+    job->result = 1;
+    job->request.command = XFU_COMMAND_TEST;
     job_encryption(job, XFU_ENCRYPTION_PASSWORD_REQUIRED, NULL);
-    ui->job = job; drain_job(ui);
+    ui->job = job;
+    drain_job(ui);
     okay = !ui->job && ui->encryption_notices == before + 2;
     xxwidgets_widget_set_visible(ui->window, 0);
-    fprintf(stderr, "Encryption UI smoke: notice=%u focus=Password encrypted/plain markers=%s\n",
-        ui->encryption_notices - before, okay ? "OK" : "FAILED");
+    fprintf(stderr, "Encryption UI smoke: notice=%u focus=Password encrypted/plain markers=%s\n", ui->encryption_notices - before, okay ? "OK" : "FAILED");
     return okay;
 }
 
@@ -3443,51 +3751,61 @@ static int smoke_widgets(ui_state *ui)
         xx_var selected = {0};
         size_t i;
         int valid = supported && xx_list_count(supported) >= 12;
-        for (i = 0; valid && i < 12; ++i)
-            many[i] = *(const xx_unpack_handle_t *)xx_list_at(supported, i);
+        for (i = 0; valid && i < 12; ++i) many[i] = *(const xx_unpack_handle_t *)xx_list_at(supported, i);
         sample.archive_path = "";
-        sample.file_types = many; sample.type_count = 12;
+        sample.file_types = many;
+        sample.type_count = 12;
         sample.selected_type = valid ? many[11] : (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
-        if (valid) valid = populate_file_types(ui, &sample) &&
-            xxwidgets_combobox_count(ui->file_type) == 12 && ui->file_type_count == 12 &&
-            xxwidgets_combobox_get_current(ui->file_type, &selected) == XXWIDGETS_OK &&
-            selected.type == XX_VAR_TYPE_UINT32 && selected.val.u32 == (uint32_t)many[11].type;
-        sample.file_types = NULL; sample.type_count = 0; sample.selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
-        if (valid) valid = populate_file_types(ui, &sample) &&
-            xxwidgets_combobox_count(ui->file_type) == 1 && ui->file_type_count == 0 &&
-            ui->selected_type.type == XX_FILE_TYPE_UNKNOWN && !archive_actions(ui);
+        if (valid)
+            valid = populate_file_types(ui, &sample) && xxwidgets_combobox_count(ui->file_type) == 12 && ui->file_type_count == 12 &&
+                    xxwidgets_combobox_get_current(ui->file_type, &selected) == XXWIDGETS_OK && selected.type == XX_VAR_TYPE_UINT32 &&
+                    selected.val.u32 == (uint32_t)many[11].type;
+        sample.file_types = NULL;
+        sample.type_count = 0;
+        sample.selected_type = (xx_unpack_handle_t){XX_FILE_TYPE_UNKNOWN, XX_UNPACK_CARRIER_NONE};
+        if (valid)
+            valid = populate_file_types(ui, &sample) && xxwidgets_combobox_count(ui->file_type) == 1 && ui->file_type_count == 0 &&
+                    ui->selected_type.type == XX_FILE_TYPE_UNKNOWN && !archive_actions(ui);
         xx_list_destroy(supported);
         if (!valid) return 0;
     }
 
-    xxwidgets_archive_entry entries[] = {
-        { "folder/", 0, 1 }, { "folder/hello.txt", 123, 0 },
-        { "Unicode-\xd0\xbf\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82.bin", UINT64_C(4294967297), 0 }
-    }, selected;
+    xxwidgets_archive_entry entries[] = {{"folder/", 0, 1},
+                                         {"folder/hello.txt", 123, 0},
+                                         {"Unicode-\xd0\xbf\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82.bin", UINT64_C(4294967297), 0}},
+                            selected;
     size_t index;
     char path[32];
     char *escaped = display_text("legacy-\x82\xff-\xc0\xaf-\xed\xa0\x80.txt");
     char *unicode = display_text(entries[2].path);
     /* Bidirectional controls and separators are escaped; their neighbours
      * (U+200D, U+2030, U+0627) and an accented letter are not. */
-    char *bidi = display_text("n\xc3\xa9\xe2\x80\xae" "evil\xe2\x81\xa6\xe2\x80\x8f\xd8\x9c\xe2\x80\xa8"
-                              "\xe2\x80\x8d\xe2\x80\xb0\xd8\xa7.txt");
-    char *bidi_member = display_member_text("a\xe2\x80\xaa" "b");
-    int valid_display = escaped && unicode && bidi && bidi_member &&
-        !strcmp(escaped, "legacy-\\x82\\xFF-\\xC0\\xAF-\\xED\\xA0\\x80.txt") &&
-        !strcmp(unicode, entries[2].path) &&
-        !strcmp(bidi, "n\xc3\xa9\\xE2\\x80\\xAE" "evil\\xE2\\x81\\xA6\\xE2\\x80\\x8F\\xD8\\x9C\\xE2\\x80\\xA8"
-                      "\xe2\x80\x8d\xe2\x80\xb0\xd8\xa7.txt") &&
-        !strcmp(bidi_member, "a[E2][80][AA]b");
-    free(escaped); free(unicode); free(bidi); free(bidi_member);
+    char *bidi = display_text(
+        "n\xc3\xa9\xe2\x80\xae"
+        "evil\xe2\x81\xa6\xe2\x80\x8f\xd8\x9c\xe2\x80\xa8"
+        "\xe2\x80\x8d\xe2\x80\xb0\xd8\xa7.txt");
+    char *bidi_member = display_member_text(
+        "a\xe2\x80\xaa"
+        "b");
+    int valid_display = escaped && unicode && bidi && bidi_member && !strcmp(escaped, "legacy-\\x82\\xFF-\\xC0\\xAF-\\xED\\xA0\\x80.txt") &&
+                        !strcmp(unicode, entries[2].path) &&
+                        !strcmp(bidi,
+                                "n\xc3\xa9\\xE2\\x80\\xAE"
+                                "evil\\xE2\\x81\\xA6\\xE2\\x80\\x8F\\xD8\\x9C\\xE2\\x80\\xA8"
+                                "\xe2\x80\x8d\xe2\x80\xb0\xd8\xa7.txt") &&
+                        !strcmp(bidi_member, "a[E2][80][AA]b");
+    free(escaped);
+    free(unicode);
+    free(bidi);
+    free(bidi_member);
     if (!valid_display) return 0;
     if (xxwidgets_app_backend(ui->app) != ui->backend) return 0;
     {
         char *snapshot = NULL;
         const char *raw = "smoke\nbyte\xff\\x0A";
         xxwidgets_status focused, hidden;
-        if (!ui->password || xxwidgets_widget_kind(ui->password) != XXWIDGETS_EDIT ||
-            !ui->get_password || xxwidgets_widget_kind(ui->get_password) != XXWIDGETS_BUTTON) return 0;
+        if (!ui->password || xxwidgets_widget_kind(ui->password) != XXWIDGETS_EDIT || !ui->get_password || xxwidgets_widget_kind(ui->get_password) != XXWIDGETS_BUTTON)
+            return 0;
         /* xxwidgets intentionally rejects focus under a hidden owner. The
          * lifecycle smoke normally hides its window; make it visible only
          * for this actual backend focus check, then restore the test setup. */
@@ -3501,21 +3819,30 @@ static int smoke_widgets(ui_state *ui)
         hidden = xxwidgets_widget_set_visible(ui->window, 0);
         if (focused != XXWIDGETS_OK || hidden != XXWIDGETS_OK) return 0;
         if (!set_automatic_password(ui, raw) || !password_snapshot(ui, &snapshot)) return 0;
-        if (!snapshot || strcmp(snapshot, raw)) { free_password(snapshot); return 0; }
+        if (!snapshot || strcmp(snapshot, raw)) {
+            free_password(snapshot);
+            return 0;
+        }
         free_password(snapshot);
         if (xxwidgets_widget_set_text(ui->password, "manual literal \\x0A") != XXWIDGETS_OK) return 0;
         password_edited(ui);
         if (!password_snapshot(ui, &snapshot)) return 0;
-        if (!snapshot || strcmp(snapshot, "manual literal \\x0A")) { free_password(snapshot); return 0; }
+        if (!snapshot || strcmp(snapshot, "manual literal \\x0A")) {
+            free_password(snapshot);
+            return 0;
+        }
         free_password(snapshot);
         {
             xxwidgets_event event = {0};
-            event.type = XXWIDGETS_EVENT_CLICK; event.widget = ui->get_password;
+            event.type = XXWIDGETS_EVENT_CLICK;
+            event.widget = ui->get_password;
             /* An empty/unopened path cannot queue recovery or clear input. */
             on_event(ui->app, &event, ui);
-            if (ui->pending_command != XFU_COMMAND_NONE || ui->pending_password_retrieval ||
-                !password_snapshot(ui, &snapshot)) return 0;
-            if (!snapshot || strcmp(snapshot, "manual literal \\x0A")) { free_password(snapshot); return 0; }
+            if (ui->pending_command != XFU_COMMAND_NONE || ui->pending_password_retrieval || !password_snapshot(ui, &snapshot)) return 0;
+            if (!snapshot || strcmp(snapshot, "manual literal \\x0A")) {
+                free_password(snapshot);
+                return 0;
+            }
             free_password(snapshot);
         }
         ui->password_manual = 0;
@@ -3523,8 +3850,9 @@ static int smoke_widgets(ui_state *ui)
     }
     {
         int checked = 0;
-        if (xx_get_settings() != ui->settings || !ui->advanced_visible || !ui->log_visible ||
-            xxwidgets_widget_get_value(ui->advanced, &checked) != XXWIDGETS_OK || !checked) return 0;
+        if (xx_get_settings() != ui->settings || !ui->advanced_visible || !ui->log_visible || xxwidgets_widget_get_value(ui->advanced, &checked) != XXWIDGETS_OK ||
+            !checked)
+            return 0;
     }
     {
         /* A job's main bar counts members and never moves back; its status
@@ -3541,9 +3869,10 @@ static int smoke_widgets(ui_state *ui)
         job_bar(ui, &job, 20);
         show_job_status(ui, &job, 0, 1, "Reading archive", 45);
         status = widget_text(ui->status);
-        valid = xxwidgets_widget_get_value(ui->progress, &value) == XXWIDGETS_OK && value == 60 &&
-            status && !strcmp(status, "Testing: 0/1 | Reading archive 45% | big.txt");
-        free(status); free(job.status_name);
+        valid =
+            xxwidgets_widget_get_value(ui->progress, &value) == XXWIDGETS_OK && value == 60 && status && !strcmp(status, "Testing: 0/1 | Reading archive 45% | big.txt");
+        free(status);
+        free(job.status_name);
         xxwidgets_widget_set_value(ui->progress, 0);
         if (!valid) return 0;
     }
@@ -3554,8 +3883,7 @@ static int smoke_widgets(ui_state *ui)
         int count = GetMenuItemCount(tools);
         UINT command = count > 0 ? GetMenuItemID(tools, count - 1) : (UINT)-1;
         wchar_t label[32];
-        if (command == (UINT)-1 || !GetMenuStringW(tools, command, label, 32, MF_BYCOMMAND) ||
-            wcscmp(label, L"&Options...")) return 0;
+        if (command == (UINT)-1 || !GetMenuStringW(tools, command, label, 32, MF_BYCOMMAND) || wcscmp(label, L"&Options...")) return 0;
         SendMessageW(window, WM_COMMAND, (WPARAM)command, 0);
         if (ui->pending_action != XFU_SHELL_OPTIONS) return 0;
         ui->pending_action = 0;
@@ -3565,8 +3893,7 @@ static int smoke_widgets(ui_state *ui)
             UINT command_about = GetMenuItemID(help, GetMenuItemCount(help) - 1);
             if (command_about == (UINT)-1) return 0;
             SendMessageW(window, WM_COMMAND, (WPARAM)command_about, 0);
-            if (ui->pending_action != XFU_SHELL_ABOUT ||
-                !SetTimer(window, (UINT_PTR)&about, 20, smoke_close_about)) return 0;
+            if (ui->pending_action != XFU_SHELL_ABOUT || !SetTimer(window, (UINT_PTR)&about, 20, smoke_close_about)) return 0;
             run_native_action(ui);
             KillTimer(window, (UINT_PTR)&about);
             if (!about.valid || !IsWindowEnabled(window)) return 0;
@@ -3577,44 +3904,43 @@ static int smoke_widgets(ui_state *ui)
             UINT command_formats = GetMenuItemID(help, 0);
             wchar_t formats_label[80];
             if (command_formats == (UINT)-1 || !GetMenuStringW(help, command_formats, formats_label, 80, MF_BYCOMMAND) ||
-                wcscmp(formats_label, L"&Supported file types...")) return 0;
+                wcscmp(formats_label, L"&Supported file types..."))
+                return 0;
             SendMessageW(window, WM_COMMAND, (WPARAM)command_formats, 0);
-            if (ui->pending_action != XFU_SHELL_FORMATS ||
-                !SetTimer(window, (UINT_PTR)&formats, 20, smoke_close_formats)) return 0;
+            if (ui->pending_action != XFU_SHELL_FORMATS || !SetTimer(window, (UINT_PTR)&formats, 20, smoke_close_formats)) return 0;
             run_native_action(ui);
             KillTimer(window, (UINT_PTR)&formats);
             if (!formats.valid || !IsWindowEnabled(window)) return 0;
         }
-        ui->pending_action = XFU_SHELL_LOG; run_native_action(ui);
+        ui->pending_action = XFU_SHELL_LOG;
+        run_native_action(ui);
         if (ui->log_visible || xxwidgets_settings_get_bool(ui->settings, UI_SETTING_LOG, 1)) return 0;
-        ui->pending_action = XFU_SHELL_LOG; run_native_action(ui);
+        ui->pending_action = XFU_SHELL_LOG;
+        run_native_action(ui);
         if (!ui->log_visible || !xxwidgets_settings_get_bool(ui->settings, UI_SETTING_LOG, 0)) return 0;
     }
 #endif
 #ifdef _WIN32
-    if (ui->backend == XXWIDGETS_BACKEND_NATIVE &&
-        (!SendMessageW((HWND)xxwidgets_widget_native_handle(ui->window), WM_GETICON, ICON_BIG, 0) ||
-         !SendMessageW((HWND)xxwidgets_widget_native_handle(ui->window), WM_GETICON, ICON_SMALL, 0))) return 0;
+    if (ui->backend == XXWIDGETS_BACKEND_NATIVE && (!SendMessageW((HWND)xxwidgets_widget_native_handle(ui->window), WM_GETICON, ICON_BIG, 0) ||
+                                                    !SendMessageW((HWND)xxwidgets_widget_native_handle(ui->window), WM_GETICON, ICON_SMALL, 0)))
+        return 0;
 #endif
     if (ui->backend == XXWIDGETS_BACKEND_NATIVE) {
         xxwidgets_archive_browser_entry members[3] = {0}, member;
         size_t i;
         for (i = 0; i < 3; ++i) {
-            members[i].path = entries[i].path; members[i].size = entries[i].size;
-            members[i].is_directory = entries[i].is_directory; members[i].flags = XXWIDGETS_ARCHIVE_SIZE_KNOWN;
+            members[i].path = entries[i].path;
+            members[i].size = entries[i].size;
+            members[i].is_directory = entries[i].is_directory;
+            members[i].flags = XXWIDGETS_ARCHIVE_SIZE_KNOWN;
         }
-        if (xxwidgets_archivebrowser_set_entries(ui->members, members, 3) != XXWIDGETS_OK ||
-            xxwidgets_archivebrowser_count(ui->members) != 3 ||
-            xxwidgets_archivebrowser_visible_count(ui->members) != 2 ||
-            xxwidgets_archivebrowser_set_directory(ui->members, "folder") != XXWIDGETS_OK ||
-            xxwidgets_archivebrowser_visible_count(ui->members) != 1 ||
-            xxwidgets_archivebrowser_get_selection(ui->members, &index, &member) != XXWIDGETS_OK ||
-            index != 1 || member.size != 123 ||
-            xxwidgets_archivebrowser_up(ui->members) != XXWIDGETS_OK ||
-            xxwidgets_widget_set_value(ui->members, 1) != XXWIDGETS_OK ||
-            xxwidgets_archivebrowser_get_selection(ui->members, &index, &member) != XXWIDGETS_OK ||
-            index != 2 || member.size != UINT64_C(4294967297) ||
-            xxwidgets_archivebrowser_set_entries(ui->members, NULL, 0) != XXWIDGETS_OK) return 0;
+        if (xxwidgets_archivebrowser_set_entries(ui->members, members, 3) != XXWIDGETS_OK || xxwidgets_archivebrowser_count(ui->members) != 3 ||
+            xxwidgets_archivebrowser_visible_count(ui->members) != 2 || xxwidgets_archivebrowser_set_directory(ui->members, "folder") != XXWIDGETS_OK ||
+            xxwidgets_archivebrowser_visible_count(ui->members) != 1 || xxwidgets_archivebrowser_get_selection(ui->members, &index, &member) != XXWIDGETS_OK ||
+            index != 1 || member.size != 123 || xxwidgets_archivebrowser_up(ui->members) != XXWIDGETS_OK || xxwidgets_widget_set_value(ui->members, 1) != XXWIDGETS_OK ||
+            xxwidgets_archivebrowser_get_selection(ui->members, &index, &member) != XXWIDGETS_OK || index != 2 || member.size != UINT64_C(4294967297) ||
+            xxwidgets_archivebrowser_set_entries(ui->members, NULL, 0) != XXWIDGETS_OK)
+            return 0;
         {
             ui_job listing = {0};
             xfu_entry legacy = {0};
@@ -3622,10 +3948,9 @@ static int smoke_widgets(ui_state *ui)
             listing.archive_path = "legacy.zip";
             legacy.name = "legacy-\x82\n.txt";
             job_entry(&listing, &legacy);
-            valid = !listing.memory_error && populate_members(ui, &listing) &&
-                xxwidgets_archivebrowser_visible_count(ui->members) == 1 &&
-                xxwidgets_archivebrowser_get_selection(ui->members, &index, &member) == XXWIDGETS_OK &&
-                index == 0 && !member.is_directory && !strcmp(member.path, "legacy-[82][0A].txt");
+            valid = !listing.memory_error && populate_members(ui, &listing) && xxwidgets_archivebrowser_visible_count(ui->members) == 1 &&
+                    xxwidgets_archivebrowser_get_selection(ui->members, &index, &member) == XXWIDGETS_OK && index == 0 && !member.is_directory &&
+                    !strcmp(member.path, "legacy-[82][0A].txt");
             free_entries(listing.entries, listing.entry_count);
             if (!valid || xxwidgets_archivebrowser_set_entries(ui->members, NULL, 0) != XXWIDGETS_OK) return 0;
         }
@@ -3634,51 +3959,45 @@ static int smoke_widgets(ui_state *ui)
             xfu_property properties[] = {{"CRC32", "75BCC38E"}, {"Method", "Deflate:Fastest"}};
             xfu_entry document = {0}, nested = {0};
             xxwidgets_event toggle = {.type = XXWIDGETS_EVENT_CHANGE, .widget = ui->advanced, .value = 1};
-            document.name = "word/document.xml"; document.properties = properties; document.property_count = 2;
+            document.name = "word/document.xml";
+            document.properties = properties;
+            document.property_count = 2;
             nested.name = "word/theme/theme1.xml";
             listing.archive_path = "document.docx";
-            job_entry(&listing, &document); job_entry(&listing, &nested);
-            if (listing.memory_error || !populate_members(ui, &listing) ||
-                xxwidgets_archivebrowser_visible_count(ui->members) != 1 ||
-                xxwidgets_archivebrowser_set_directory(ui->members, "word") != XXWIDGETS_OK ||
-                xxwidgets_archivebrowser_visible_count(ui->members) != 2 ||
-                xxwidgets_widget_set_value(ui->members, 1) != XXWIDGETS_OK ||
-                xxwidgets_widget_set_value(ui->advanced, 1) != XXWIDGETS_OK) {
-                free_entries(listing.entries, listing.entry_count); return 0;
+            job_entry(&listing, &document);
+            job_entry(&listing, &nested);
+            if (listing.memory_error || !populate_members(ui, &listing) || xxwidgets_archivebrowser_visible_count(ui->members) != 1 ||
+                xxwidgets_archivebrowser_set_directory(ui->members, "word") != XXWIDGETS_OK || xxwidgets_archivebrowser_visible_count(ui->members) != 2 ||
+                xxwidgets_widget_set_value(ui->members, 1) != XXWIDGETS_OK || xxwidgets_widget_set_value(ui->advanced, 1) != XXWIDGETS_OK) {
+                free_entries(listing.entries, listing.entry_count);
+                return 0;
             }
             on_event(ui->app, &toggle, ui);
-            if (!ui->advanced_visible || !xxwidgets_settings_get_bool(ui->settings, UI_SETTING_ADVANCED, 0) ||
-                xxwidgets_archivebrowser_column_count(ui->members) != 7 ||
-                xxwidgets_listbox_count(ui->details) != 2 ||
-                strcmp(xxwidgets_archivebrowser_directory(ui->members), "word/") ||
+            if (!ui->advanced_visible || !xxwidgets_settings_get_bool(ui->settings, UI_SETTING_ADVANCED, 0) || xxwidgets_archivebrowser_column_count(ui->members) != 7 ||
+                xxwidgets_listbox_count(ui->details) != 2 || strcmp(xxwidgets_archivebrowser_directory(ui->members), "word/") ||
                 xxwidgets_archivebrowser_get_selection(ui->members, &index, &member) != XXWIDGETS_OK || index != 0)
                 return 0;
-            xxwidgets_widget_set_value(ui->advanced, 0); on_event(ui->app, &toggle, ui);
-            if (ui->advanced_visible || xxwidgets_settings_get_bool(ui->settings, UI_SETTING_ADVANCED, 1) ||
-                xxwidgets_archivebrowser_column_count(ui->members) != 5 ||
+            xxwidgets_widget_set_value(ui->advanced, 0);
+            on_event(ui->app, &toggle, ui);
+            if (ui->advanced_visible || xxwidgets_settings_get_bool(ui->settings, UI_SETTING_ADVANCED, 1) || xxwidgets_archivebrowser_column_count(ui->members) != 5 ||
                 xxwidgets_archivebrowser_get_selection(ui->members, &index, &member) != XXWIDGETS_OK || index != 0)
                 return 0;
             {
                 size_t rows[] = {0, 1}, sources[2], count = 0;
-                if (xxwidgets_archivebrowser_set_selection(ui->members, rows, 2) != XXWIDGETS_OK ||
-                    xxwidgets_archivebrowser_selection_count(ui->members) != 2 ||
-                    xxwidgets_archivebrowser_selected_sources(ui->members, sources, 2, &count) != XXWIDGETS_OK ||
-                    count != 2 || sources[0] != 0 || sources[1] != 1) return 0;
+                if (xxwidgets_archivebrowser_set_selection(ui->members, rows, 2) != XXWIDGETS_OK || xxwidgets_archivebrowser_selection_count(ui->members) != 2 ||
+                    xxwidgets_archivebrowser_selected_sources(ui->members, sources, 2, &count) != XXWIDGETS_OK || count != 2 || sources[0] != 0 || sources[1] != 1)
+                    return 0;
                 update_metadata(ui);
             }
             if (xxwidgets_archivebrowser_set_entries(ui->members, NULL, 0) != XXWIDGETS_OK) return 0;
         }
-    } else if (xxwidgets_archiveview_set_entries(ui->members, entries, 3) != XXWIDGETS_OK ||
-               xxwidgets_archiveview_count(ui->members) != 3 ||
-               xxwidgets_widget_set_value(ui->members, 2) != XXWIDGETS_OK ||
-               xxwidgets_archiveview_get_selection(ui->members, &index, &selected) != XXWIDGETS_OK ||
-               index != 2 || selected.size != UINT64_C(4294967297) ||
-               xxwidgets_archiveview_clear(ui->members) != XXWIDGETS_OK) return 0;
-    if (xxwidgets_widget_set_text(ui->output_dir, "test-output") != XXWIDGETS_OK ||
-        xxwidgets_widget_get_text(ui->output_dir, path, sizeof(path), NULL) != XXWIDGETS_OK ||
-        strcmp(path, "test-output") ||
-        xxwidgets_widget_set_value(ui->progress, 73) != XXWIDGETS_OK ||
-        xxwidgets_app_poll(ui->app, 0) != XXWIDGETS_OK) return 0;
+    } else if (xxwidgets_archiveview_set_entries(ui->members, entries, 3) != XXWIDGETS_OK || xxwidgets_archiveview_count(ui->members) != 3 ||
+               xxwidgets_widget_set_value(ui->members, 2) != XXWIDGETS_OK || xxwidgets_archiveview_get_selection(ui->members, &index, &selected) != XXWIDGETS_OK ||
+               index != 2 || selected.size != UINT64_C(4294967297) || xxwidgets_archiveview_clear(ui->members) != XXWIDGETS_OK)
+        return 0;
+    if (xxwidgets_widget_set_text(ui->output_dir, "test-output") != XXWIDGETS_OK || xxwidgets_widget_get_text(ui->output_dir, path, sizeof(path), NULL) != XXWIDGETS_OK ||
+        strcmp(path, "test-output") || xxwidgets_widget_set_value(ui->progress, 73) != XXWIDGETS_OK || xxwidgets_app_poll(ui->app, 0) != XXWIDGETS_OK)
+        return 0;
     return 1;
 }
 
@@ -3691,36 +4010,42 @@ static void smoke_file_types(ui_state *ui)
     size_t i;
     int valid = 1, next = -1, change_path = 0;
     if (ui->job || ui->pending_command != XFU_COMMAND_NONE || !ui->running) return;
-    if (xxwidgets_combobox_get_current(ui->file_type, &value) != XXWIDGETS_OK ||
-        value.type != XX_VAR_TYPE_UINT32) valid = 0;
+    if (xxwidgets_combobox_get_current(ui->file_type, &value) != XXWIDGETS_OK || value.type != XX_VAR_TYPE_UINT32) valid = 0;
     if (ui->type_smoke_stage != 3) {
         static const xx_file_type_t handles[] = {XX_FILE_TYPE_GZ, XX_FILE_TYPE_TAR_GZ};
         if (xxwidgets_combobox_count(ui->file_type) != 2) valid = 0;
         for (i = 0; i < 2; ++i) {
-            if (xxwidgets_combobox_get_record(ui->file_type, i, &record) != XXWIDGETS_OK ||
-                record->var.type != XX_VAR_TYPE_UINT32 || record->var.val.u32 != (uint32_t)handles[i]) valid = 0;
+            if (xxwidgets_combobox_get_record(ui->file_type, i, &record) != XXWIDGETS_OK || record->var.type != XX_VAR_TYPE_UINT32 ||
+                record->var.val.u32 != (uint32_t)handles[i])
+                valid = 0;
         }
     }
     switch (ui->type_smoke_stage) {
-    case 0:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
-        next = 0; break;
-    case 1:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_GZ && ui->listed_count == 1 &&
-            ui->listed_entries[0].unpacked_size >= 2048;
-        next = 1; break;
-    case 2:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
-        change_path = 1; break;
-    case 3:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_ZIP && ui->listed_count == 2 &&
-            xxwidgets_combobox_count(ui->file_type) == 1;
-        change_path = 2; break;
-    case 4:
-        valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
-        if (valid) { ui->exit_code = 0; ui->running = 0; return; }
-        break;
-    default: valid = 0; break;
+        case 0:
+            valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
+            next = 0;
+            break;
+        case 1:
+            valid = valid && value.val.u32 == XX_FILE_TYPE_GZ && ui->listed_count == 1 && ui->listed_entries[0].unpacked_size >= 2048;
+            next = 1;
+            break;
+        case 2:
+            valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
+            change_path = 1;
+            break;
+        case 3:
+            valid = valid && value.val.u32 == XX_FILE_TYPE_ZIP && ui->listed_count == 2 && xxwidgets_combobox_count(ui->file_type) == 1;
+            change_path = 2;
+            break;
+        case 4:
+            valid = valid && value.val.u32 == XX_FILE_TYPE_TAR_GZ && ui->listed_count == 2;
+            if (valid) {
+                ui->exit_code = 0;
+                ui->running = 0;
+                return;
+            }
+            break;
+        default: valid = 0; break;
     }
     if (valid && change_path) {
         char *path = widget_text(ui->archive_path);
@@ -3732,7 +4057,10 @@ static void smoke_file_types(ui_state *ui)
             char *grown;
             if (length < 4 || strcmp(path + length - 4, ".zip")) valid = 0;
             else if (!(grown = (char *)realloc(path, length + 4))) valid = 0;
-            else { path = grown; memcpy(path + length - 4, ".tar.gz", 8); }
+            else {
+                path = grown;
+                memcpy(path + length - 4, ".tar.gz", 8);
+            }
         }
         if (valid && xxwidgets_widget_set_text(ui->archive_path, path) != XXWIDGETS_OK) valid = 0;
         free(path);
@@ -3742,24 +4070,35 @@ static void smoke_file_types(ui_state *ui)
             else ui->pending_command = XFU_COMMAND_LIST;
         }
     } else if (valid && next >= 0 && xxwidgets_widget_set_value(ui->file_type, next) == XXWIDGETS_OK) {
-        event.type = XXWIDGETS_EVENT_SELECT; event.widget = ui->file_type; event.value = next;
+        event.type = XXWIDGETS_EVENT_SELECT;
+        event.widget = ui->file_type;
+        event.value = next;
         on_event(ui->app, &event, ui);
         valid = ui->listed_count == 0;
     } else valid = 0;
-    if (valid) { ++ui->type_smoke_stage; return; }
+    if (valid) {
+        ++ui->type_smoke_stage;
+        return;
+    }
     show_status(ui, "Unpack handle selection smoke failed.");
-    ui->exit_code = 2; ui->running = 0;
+    ui->exit_code = 2;
+    ui->running = 0;
 }
 
 #ifdef _WIN32
-typedef struct progress_smoke_window { HWND owner, dialog; } progress_smoke_window;
+typedef struct progress_smoke_window {
+    HWND owner, dialog;
+} progress_smoke_window;
 static BOOL CALLBACK find_progress_smoke(HWND window, LPARAM data)
 {
     progress_smoke_window *found = (progress_smoke_window *)data;
     wchar_t title[80];
     if (GetWindow(window, GW_OWNER) != found->owner) return TRUE;
     GetWindowTextW(window, title, 80);
-    if (!wcscmp(title, L"Extracting archive")) { found->dialog = window; return FALSE; }
+    if (!wcscmp(title, L"Extracting archive")) {
+        found->dialog = window;
+        return FALSE;
+    }
     return TRUE;
 }
 #endif
@@ -3772,30 +4111,35 @@ static int drive_progress_smoke(ui_state *ui)
     if (ui->backend == XXWIDGETS_BACKEND_NATIVE) {
         progress_smoke_window found = {(HWND)xxwidgets_widget_native_handle(ui->window), NULL};
         EnumThreadWindows(GetCurrentThreadId(), find_progress_smoke, (LPARAM)&found);
-        dialog = found.dialog; visible = dialog && IsWindowVisible(dialog);
+        dialog = found.dialog;
+        visible = dialog && IsWindowVisible(dialog);
         if (visible && !ui->progress_smoke_shown) {
             HWND bar = NULL;
             int count = 0, busy = 0;
             if (IsWindowEnabled(found.owner)) return 0;
             while ((bar = FindWindowExW(dialog, bar, PROGRESS_CLASSW, NULL))) {
-                ++count; if (IsWindowVisible(bar)) ++busy;
+                ++count;
+                if (IsWindowVisible(bar)) ++busy;
             }
             if (count != XX_PD_LEVELS || busy < 2) return 0;
         }
     } else {
-        HANDLE output = CreateFileW(L"CONOUT$", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-            NULL, OPEN_EXISTING, 0, NULL);
+        HANDLE output = CreateFileW(L"CONOUT$", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
         CONSOLE_SCREEN_BUFFER_INFO info;
         int row;
         if (output == INVALID_HANDLE_VALUE) return 0;
-        if (!GetConsoleScreenBufferInfo(output, &info)) { CloseHandle(output); return 0; }
+        if (!GetConsoleScreenBufferInfo(output, &info)) {
+            CloseHandle(output);
+            return 0;
+        }
         for (row = info.srWindow.Top; row <= info.srWindow.Bottom && !visible; ++row) {
             WCHAR line[501];
             DWORD read_count, width = (DWORD)(info.srWindow.Right - info.srWindow.Left + 1);
             COORD position = {info.srWindow.Left, (SHORT)row};
             if (width > 500) width = 500;
             if (!ReadConsoleOutputCharacterW(output, line, width, position, &read_count)) {
-                CloseHandle(output); return 0;
+                CloseHandle(output);
+                return 0;
             }
             line[read_count] = 0;
             visible = wcsstr(line, L"Extracting archive") != NULL;
@@ -3814,8 +4158,10 @@ static int drive_progress_smoke(ui_state *ui)
         } else {
             INPUT_RECORD record = {0};
             DWORD written;
-            record.EventType = KEY_EVENT; record.Event.KeyEvent.bKeyDown = TRUE;
-            record.Event.KeyEvent.wRepeatCount = 1; record.Event.KeyEvent.wVirtualKeyCode = VK_ESCAPE;
+            record.EventType = KEY_EVENT;
+            record.Event.KeyEvent.bKeyDown = TRUE;
+            record.Event.KeyEvent.wRepeatCount = 1;
+            record.Event.KeyEvent.wVirtualKeyCode = VK_ESCAPE;
             if (!WriteConsoleInputW(GetStdHandle(STD_INPUT_HANDLE), &record, 1, &written) || written != 1) return 0;
         }
         ui->progress_smoke_cancelled = 1;
@@ -3850,36 +4196,42 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
      * invalid startup arguments, without waiting for a modal error dialog. */
     for (i = 1; i < argc && strcmp(argv[i], "--"); ++i)
         if (!strcmp(argv[i], "--smoke-test") || !strcmp(argv[i], "--smoke-encryption") || !strcmp(argv[i], "--smoke-file-types") ||
-            !strcmp(argv[i], "--smoke-password-embedded") || !strcmp(argv[i], "--smoke-password-manual") ||
-            !strcmp(argv[i], "--smoke-password-retrieve") ||
-            !strncmp(argv[i], "--smoke-progress-", 17)) ui.smoke = 1;
+            !strcmp(argv[i], "--smoke-password-embedded") || !strcmp(argv[i], "--smoke-password-manual") || !strcmp(argv[i], "--smoke-password-retrieve") ||
+            !strncmp(argv[i], "--smoke-progress-", 17))
+            ui.smoke = 1;
     for (i = 1; i < argc; ++i) {
         const char *argument = argv[i];
         if (!end_options && !strcmp(argument, "--help")) {
             if (!ui.smoke) report(backend, ui_usage, 0);
             return 0;
         }
-        if (!end_options && !strcmp(argument, "--smoke-test")) { ui.smoke = 1; continue; }
-        if (!end_options && !strcmp(argument, "--smoke-encryption")) { ui.smoke = ui.encryption_smoke = 1; continue; }
+        if (!end_options && !strcmp(argument, "--smoke-test")) {
+            ui.smoke = 1;
+            continue;
+        }
+        if (!end_options && !strcmp(argument, "--smoke-encryption")) {
+            ui.smoke = ui.encryption_smoke = 1;
+            continue;
+        }
         if (!end_options && !strcmp(argument, "--smoke-file-types")) {
-            ui.smoke = ui.type_smoke = 1; continue;
-        }
-        if (!end_options && (!strcmp(argument, "--smoke-password-embedded") ||
-                             !strcmp(argument, "--smoke-password-manual") ||
-                             !strcmp(argument, "--smoke-password-retrieve"))) {
-            ui.smoke = 1;
-            ui.password_smoke = !strcmp(argument, "--smoke-password-embedded") ? 1 :
-                !strcmp(argument, "--smoke-password-manual") ? 2 : 3;
+            ui.smoke = ui.type_smoke = 1;
             continue;
         }
-        if (!end_options && (!strcmp(argument, "--smoke-progress-fast") ||
-            !strcmp(argument, "--smoke-progress-slow") || !strcmp(argument, "--smoke-progress-cancel"))) {
+        if (!end_options &&
+            (!strcmp(argument, "--smoke-password-embedded") || !strcmp(argument, "--smoke-password-manual") || !strcmp(argument, "--smoke-password-retrieve"))) {
             ui.smoke = 1;
-            ui.progress_smoke = !strcmp(argument, "--smoke-progress-fast") ? 1 :
-                !strcmp(argument, "--smoke-progress-slow") ? 2 : 3;
+            ui.password_smoke = !strcmp(argument, "--smoke-password-embedded") ? 1 : !strcmp(argument, "--smoke-password-manual") ? 2 : 3;
             continue;
         }
-        if (!end_options && !strcmp(argument, "--")) { end_options = 1; continue; }
+        if (!end_options && (!strcmp(argument, "--smoke-progress-fast") || !strcmp(argument, "--smoke-progress-slow") || !strcmp(argument, "--smoke-progress-cancel"))) {
+            ui.smoke = 1;
+            ui.progress_smoke = !strcmp(argument, "--smoke-progress-fast") ? 1 : !strcmp(argument, "--smoke-progress-slow") ? 2 : 3;
+            continue;
+        }
+        if (!end_options && !strcmp(argument, "--")) {
+            end_options = 1;
+            continue;
+        }
         if (!end_options && (!strcmp(argument, "--handle") || !strncmp(argument, "--handle=", 9))) {
             const char *name = argument[8] == '=' ? argument + 9 : i + 1 < argc ? argv[++i] : NULL;
             if (have_handle || !parse_unpack_handle(name, &ui.startup_handle)) {
@@ -3889,28 +4241,40 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
             have_handle = 1;
             continue;
         }
-        if (!end_options && !strncmp(argument, "-o", 2) && argument[2]) { output = argument + 2; continue; }
+        if (!end_options && !strncmp(argument, "-o", 2) && argument[2]) {
+            output = argument + 2;
+            continue;
+        }
         if (!end_options && !strncmp(argument, "-p", 2)) {
             if (password) {
                 if (!ui.smoke) report(backend, "Give the password only once (-p<password>).", 1);
                 return 2;
             }
-            password = argument + 2; continue;
+            password = argument + 2;
+            continue;
         }
         if (!end_options && argument[0] == '-') {
             if (!ui.smoke) report(backend, "Unknown option. Use --help for usage.", 1);
             return 2;
         }
         if (!have_archive && !have_command && xfu_parse_command(argument) != XFU_COMMAND_NONE) {
-            startup = xfu_parse_command(argument); have_command = 1;
+            startup = xfu_parse_command(argument);
+            have_command = 1;
             if (startup == XFU_COMMAND_ADD) {
-                if (!ui.smoke) report(backend, "XFileUnpacker opens existing archives only. "
-                    "Create archives with the console tool: xfu a <archive> <file>...", 1);
+                if (!ui.smoke)
+                    report(backend,
+                           "XFileUnpacker opens existing archives only. "
+                           "Create archives with the console tool: xfu a <archive> <file>...",
+                           1);
                 return 2;
             }
             continue;
         }
-        if (!have_archive) { archive = argument; have_archive = 1; continue; }
+        if (!have_archive) {
+            archive = argument;
+            have_archive = 1;
+            continue;
+        }
         if (!ui.smoke) report(backend, "Unexpected argument. Use --help for usage.", 1);
         return 2;
     }
@@ -3939,21 +4303,21 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
     if (ui.progress_smoke && (!have_archive || startup != XFU_COMMAND_EXTRACT)) {
         return 2;
     }
-    if (ui.password_smoke && (!have_archive || startup != XFU_COMMAND_LIST ||
-                             (ui.password_smoke == 1 && password))) {
+    if (ui.password_smoke && (!have_archive || startup != XFU_COMMAND_LIST || (ui.password_smoke == 1 && password))) {
         return 2;
     }
     ui.password_smoke_expected = password;
 #ifdef _WIN32
     if (ui.smoke && backend == XXWIDGETS_BACKEND_TUI && !smoke_console_create(&console)) {
-        smoke_console_destroy(&console); return 2;
+        smoke_console_destroy(&console);
+        return 2;
     }
 #endif
-    ui.settings = ui.smoke ? xx_settings_create_memory() :
-        xx_settings_create_native("horsicq", "XFileUnpacker");
+    ui.settings = ui.smoke ? xx_settings_create_memory() : xx_settings_create_native("horsicq", "XFileUnpacker");
     if (!ui.settings) {
         if (!ui.smoke) report(backend, "Cannot create application settings.", 1);
-        ui.exit_code = 2; goto cleanup;
+        ui.exit_code = 2;
+        goto cleanup;
     }
     ui.previous_settings = xx_get_settings();
     xx_set_settings(ui.settings);
@@ -3961,7 +4325,8 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
     if (ui.smoke && !have_archive &&
         (xxwidgets_settings_set_bool(ui.settings, UI_SETTING_ADVANCED, 1) != XXWIDGETS_OK ||
          xxwidgets_settings_set_bool(ui.settings, UI_SETTING_LOG, 1) != XXWIDGETS_OK)) {
-        ui.exit_code = 2; goto cleanup;
+        ui.exit_code = 2;
+        goto cleanup;
     }
     ui.advanced_visible = xxwidgets_settings_get_bool(ui.settings, UI_SETTING_ADVANCED, 0);
     ui.log_visible = xxwidgets_settings_get_bool(ui.settings, UI_SETTING_LOG, 0);
@@ -3970,18 +4335,23 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
     ui.force_enabled = xxwidgets_settings_get_bool(ui.settings, UI_SETTING_FORCE, 1);
     if (!create_ui(&ui, archive, output)) {
         if (!ui.smoke) report(backend, "Cannot open the interface. Run the terminal edition in an interactive terminal.", 1);
-        ui.exit_code = 2; goto cleanup;
+        ui.exit_code = 2;
+        goto cleanup;
     }
-    if (!password_archive_changed(&ui, archive) ||
-        (password && !set_automatic_password(&ui, password))) {
-        ui.exit_code = 2; goto cleanup;
+    if (!password_archive_changed(&ui, archive) || (password && !set_automatic_password(&ui, password))) {
+        ui.exit_code = 2;
+        goto cleanup;
     }
     if (ui.encryption_smoke && have_archive) {
-        ui.exit_code = 2; goto cleanup;
+        ui.exit_code = 2;
+        goto cleanup;
     }
     if (have_handle) {
         ui.pending_type_path = copy_text(archive);
-        if (!ui.pending_type_path) { ui.exit_code = 2; goto cleanup; }
+        if (!ui.pending_type_path) {
+            ui.exit_code = 2;
+            goto cleanup;
+        }
         ui.selected_type = ui.startup_handle;
         ui.type_chosen = ui.startup_handle.type != XX_FILE_TYPE_UNKNOWN;
         ui.startup_handle_pending = 1;
@@ -3990,7 +4360,8 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
     if (settings_load_status != XXFC_OK) show_status(&ui, "Cannot load application settings. Using defaults.");
 #ifdef _WIN32
     if (desktop_shell(&ui) && !install_native_shortcuts(&ui)) {
-        ui.exit_code = 2; goto cleanup;
+        ui.exit_code = 2;
+        goto cleanup;
     }
 #endif
     ui.running = 1;
@@ -4003,7 +4374,10 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
          * the caller's deliberately incorrect smoke password. */
         ui.retrieve_smoke_click = 1;
     } else if (startup != XFU_COMMAND_NONE && !start_job(&ui, startup)) {
-        if (ui.smoke) { ui.exit_code = 2; ui.running = 0; }
+        if (ui.smoke) {
+            ui.exit_code = 2;
+            ui.running = 0;
+        }
     }
     while (ui.running) {
         xxwidgets_status status;
@@ -4018,8 +4392,7 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
 #ifdef _WIN32
         if (desktop_shell(&ui) && ui.context_pending) {
             ui.context_pending = 0;
-            if (!ui.closing && !xfu_native_shell_archive_menu(ui.shell, ui.members,
-                    ui.context_x, ui.context_y, ui.busy))
+            if (!ui.closing && !xfu_native_shell_archive_menu(ui.shell, ui.members, ui.context_x, ui.context_y, ui.busy))
                 show_status(&ui, "Cannot show the archive context menu.");
         }
         if (desktop_shell(&ui) && ui.pending_action) run_native_action(&ui);
@@ -4027,10 +4400,12 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
         if (ui.retrieve_smoke_click && !ui.job && !ui.closing) {
             xxwidgets_event event = {0};
             ui.retrieve_smoke_click = 0;
-            event.type = XXWIDGETS_EVENT_CLICK; event.widget = ui.get_password;
+            event.type = XXWIDGETS_EVENT_CLICK;
+            event.widget = ui.get_password;
             on_event(ui.app, &event, &ui);
             if (!ui.pending_password_retrieval || ui.pending_command != XFU_COMMAND_LIST) {
-                ui.exit_code = 2; ui.running = 0;
+                ui.exit_code = 2;
+                ui.running = 0;
             }
         }
         if (ui.running && ui.pending_command != XFU_COMMAND_NONE && !ui.job && !ui.closing) {
@@ -4038,24 +4413,35 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
             ui.pending_command = XFU_COMMAND_NONE;
             if (!start_job(&ui, command)) {
                 ui.busy_focus = NULL;
-                if (ui.smoke) { ui.exit_code = 2; ui.running = 0; }
+                if (ui.smoke) {
+                    ui.exit_code = 2;
+                    ui.running = 0;
+                }
             } else if (ui.password_smoke == 3 && ui.job && ui.job->retrieve_password) {
                 xxwidgets_event event = {0};
                 /* An in-flight click cannot queue another operation. */
-                event.type = XXWIDGETS_EVENT_CLICK; event.widget = ui.get_password;
+                event.type = XXWIDGETS_EVENT_CLICK;
+                event.widget = ui.get_password;
                 on_event(ui.app, &event, &ui);
                 if (ui.pending_password_retrieval || ui.pending_command != XFU_COMMAND_NONE) {
-                    ui.exit_code = 2; ui.running = 0; cancel_job(&ui);
+                    ui.exit_code = 2;
+                    ui.running = 0;
+                    cancel_job(&ui);
                 } else if (ui.password_smoke_stage == 3) {
                     /* Change away and back: equality of the final path alone
                      * must not make an earlier recovery result current. */
-                    event.type = XXWIDGETS_EVENT_CHANGE; event.widget = ui.archive_path;
+                    event.type = XXWIDGETS_EVENT_CHANGE;
+                    event.widget = ui.archive_path;
                     if (xxwidgets_widget_set_text(ui.archive_path, "UI-stale-password-retrieval.invalid") != XXWIDGETS_OK) {
-                        ui.exit_code = 2; ui.running = 0; cancel_job(&ui);
+                        ui.exit_code = 2;
+                        ui.running = 0;
+                        cancel_job(&ui);
                     } else {
                         on_event(ui.app, &event, &ui);
                         if (xxwidgets_widget_set_text(ui.archive_path, ui.job->archive_path) != XXWIDGETS_OK) {
-                            ui.exit_code = 2; ui.running = 0; cancel_job(&ui);
+                            ui.exit_code = 2;
+                            ui.running = 0;
+                            cancel_job(&ui);
                         } else on_event(ui.app, &event, &ui);
                     }
                 } else if (ui.password_smoke_stage == 4) cancel_job(&ui);
@@ -4071,8 +4457,7 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
         if (ui.browse_requested) {
             ui.browse_requested = 0;
             /* Choosing an archive opens it, as File > Open does on Windows. */
-            if (!ui.job && !ui.closing && browse_file(&ui, ui.archive_path))
-                ui.pending_command = XFU_COMMAND_LIST;
+            if (!ui.job && !ui.closing && browse_file(&ui, ui.archive_path)) ui.pending_command = XFU_COMMAND_LIST;
             else {
                 ui.busy_focus = NULL;
                 if (!ui.smoke) xxwidgets_widget_focus(ui.archive_browse);
@@ -4080,22 +4465,26 @@ int xfu_ui_run(int argc, char **argv, xxwidgets_backend backend)
         }
         /* After a dialog, focus returns to the button that opened it. */
         if (ui.options_requested) {
-            ui.options_requested = 0; show_options(&ui);
+            ui.options_requested = 0;
+            show_options(&ui);
             if (!ui.smoke) xxwidgets_widget_focus(ui.options);
         }
         if (ui.formats_requested) {
-            ui.formats_requested = 0; show_supported_types(&ui);
+            ui.formats_requested = 0;
+            show_supported_types(&ui);
             if (!ui.smoke) xxwidgets_widget_focus(ui.formats_button);
         }
         if (ui.about_requested) {
             ui.about_requested = 0;
-            if (xxwidgets_about_dialog_show(ui.about, ui.window) != XXWIDGETS_OK)
-                show_status(&ui, "Cannot show the About dialog.");
+            if (xxwidgets_about_dialog_show(ui.about, ui.window) != XXWIDGETS_OK) show_status(&ui, "Cannot show the About dialog.");
             else if (!ui.smoke) xxwidgets_widget_focus(ui.about_button);
         }
     }
 cleanup:
-    if (ui.job) { cancel_job(&ui); job_destroy(ui.job); }
+    if (ui.job) {
+        cancel_job(&ui);
+        job_destroy(ui.job);
+    }
     free_entries(ui.listed_entries, ui.listed_count);
     free(ui.browser_sources);
     free(ui.file_types_path);

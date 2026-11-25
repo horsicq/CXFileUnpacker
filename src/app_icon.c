@@ -4,13 +4,12 @@
 #include "app_icon.h"
 #ifdef _WIN32
 #include <windows.h>
-void xfu_set_application_icon(xxwidgets_widget *window) {
+void xfu_set_application_icon(xxwidgets_widget *window)
+{
     HWND handle = (HWND)xxwidgets_widget_native_handle(window);
     HINSTANCE instance = GetModuleHandleW(NULL);
-    HICON large = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON,
-        GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_SHARED);
-    HICON small = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON,
-        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED);
+    HICON large = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_SHARED);
+    HICON small = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED);
     if (large) SendMessageW(handle, WM_SETICON, ICON_BIG, (LPARAM)large);
     if (small) SendMessageW(handle, WM_SETICON, ICON_SMALL, (LPARAM)small);
 }
@@ -18,7 +17,8 @@ void xfu_set_application_icon(xxwidgets_widget *window) {
 #include <gtk/gtk.h>
 #include <unistd.h>
 #include <string.h>
-void xfu_set_application_icon(xxwidgets_widget *window) {
+void xfu_set_application_icon(xxwidgets_widget *window)
+{
     GtkWindow *handle = GTK_WINDOW(xxwidgets_widget_native_handle(window));
     char executable[4096];
     ssize_t length;
@@ -37,5 +37,8 @@ void xfu_set_application_icon(xxwidgets_widget *window) {
     }
 }
 #else
-void xfu_set_application_icon(xxwidgets_widget *window) { (void)window; }
+void xfu_set_application_icon(xxwidgets_widget *window)
+{
+    (void)window;
+}
 #endif

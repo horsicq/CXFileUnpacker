@@ -9,12 +9,14 @@
 #endif
 #include <windows.h>
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous,
-                    PWSTR command_line, int show_command)
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, int show_command)
 {
     int argc = 0, result;
     char **argv = NULL;
-    (void)instance; (void)previous; (void)command_line; (void)show_command;
+    (void)instance;
+    (void)previous;
+    (void)command_line;
+    (void)show_command;
     if (!xfu_ui_windows_arguments(&argc, &argv)) {
         MessageBoxW(NULL, L"Cannot read the command line.", L"XFileUnpacker", MB_OK | MB_ICONERROR);
         return 2;
