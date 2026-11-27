@@ -2,6 +2,7 @@
 
 import gzip
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -1642,6 +1643,63 @@ class ArchiveCompatibility(unittest.TestCase):
         member.write_bytes(b"original extracted file")
         self.run_xfu("x", archive.name, "--reader", "native", "-oextract", success=False)
         self.assertEqual(member.read_bytes(), b"original extracted file")
+
+    def test_force_extraction_keeps_the_readable_part(self):
+        archive = self.make_corrupt_zip()
+        destination = self.root / "salvage"
+        destination.mkdir()
+        result = self.run_xfu("x", archive.name, "--reader", "native", "--force",
+                              "-osalvage", success=False)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, output)
+        self.assertIn("alpha.txt -- PARTIAL", output)
+        recovered = destination / "alpha.txt"
+        self.assertTrue(recovered.is_file(), output)
+        self.assertEqual(len(recovered.read_bytes()), len(self.payload))
+        self.assertNotEqual(recovered.read_bytes(), self.payload)
+
+    def test_force_extraction_reports_partial_in_json(self):
+        archive = self.make_corrupt_zip()
+        destination = self.root / "salvage-json"
+        destination.mkdir()
+        result = self.run_xfu("x", archive.name, "--reader", "native", "--force",
+                              "-osalvage-json", "--json", success=False)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, output)
+        document = json.loads(result.stdout)
+        results = [event for event in document["events"] if event["type"] == "result"]
+        self.assertEqual(len(results), 1, output)
+        self.assertEqual(results[0]["name"], "alpha.txt")
+        self.assertFalse(results[0]["success"])
+        self.assertTrue(results[0]["partial"])
+        self.assertIsNone(results[0]["failure"])
+        self.assertEqual(document["status"], 1)
+
+    def test_failed_extraction_reports_no_partial_in_json(self):
+        archive = self.make_corrupt_zip()
+        destination = self.root / "failed-json"
+        destination.mkdir()
+        result = self.run_xfu("x", archive.name, "--reader", "native",
+                              "-ofailed-json", "--json", success=False)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, output)
+        document = json.loads(result.stdout)
+        results = [event for event in document["events"] if event["type"] == "result"]
+        self.assertEqual(len(results), 1, output)
+        self.assertFalse(results[0]["success"])
+        self.assertFalse(results[0]["partial"])
+        self.assertIn("--force", results[0]["failure"])
+
+    def test_force_extraction_reports_partial_in_xml(self):
+        archive = self.make_corrupt_zip()
+        destination = self.root / "salvage-xml"
+        destination.mkdir()
+        result = self.run_xfu("x", archive.name, "--reader", "native", "--force",
+                              "-osalvage-xml", "--xml", success=False)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, output)
+        self.assertIn('<result name="alpha.txt" success="false" partial="true"/>', result.stdout)
+        self.assertIn("<status>1</status>", result.stdout)
 
     def test_truncated_archive_fails(self):
         self.run_xfu("a", "valid.zip", "alpha.txt", "--format=zip")

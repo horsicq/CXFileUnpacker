@@ -39,7 +39,10 @@ xfu a archive.zip notes.txt --compression=bzip2
 Useful options:
 
 - `-p<password>` or `--password-env=<name>`: supply a password.
-- `--json` or `--xml`: machine-readable output.
+- `--force`: on `x`, keep the readable part of a member whose stream is
+  damaged; the run still returns `1`.
+- `--json` or `--xml`: machine-readable output; each extracted member gets
+  a `result` event with `success` and `partial`.
 - `--handle <name>`: choose how to unpack the file, for example
   `--handle GZ` or `--handle TAR_GZ` for a `.tar.gz`.
 - `--reader <name>`: select a validated reader, such as `native:zip`.

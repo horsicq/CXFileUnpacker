@@ -430,6 +430,34 @@ static void structured_test_result(void *user, const xfu_entry *entry, bool succ
     structured_entry((structured_output *)user, entry, 1, success);
 }
 
+static void structured_result(structured_output *output, const xfu_entry *entry, bool success, bool partial)
+{
+    if (structured_event_prefix(output) < 0) return;
+    if (output->format == OUTPUT_JSON) {
+        if (fputs("\"type\":\"result\",\"name\":", stdout) == EOF || json_string(stdout, entry->name) < 0 ||
+            fprintf(stdout, ",\"success\":%s,\"partial\":%s,\"failure\":", success ? "true" : "false", partial ? "true" : "false") < 0 ||
+            (entry->failure ? json_string(stdout, entry->failure) : fputs("null", stdout)) < 0 || fputc('}', stdout) == EOF)
+            output->output_failed = true;
+        return;
+    }
+    if (fputs("    <result name=\"", stdout) == EOF || xml_string(stdout, entry->name) < 0 ||
+        fprintf(stdout, "\" success=\"%s\" partial=\"%s\"", success ? "true" : "false", partial ? "true" : "false") < 0)
+        goto failed;
+    if (entry->failure) {
+        if (fputs(">\n      <failure>", stdout) == EOF || xml_string(stdout, entry->failure) < 0 || fputs("</failure>\n    </result>\n", stdout) == EOF)
+            goto failed;
+    } else if (fputs("/>\n", stdout) == EOF)
+        goto failed;
+    return;
+failed:
+    output->output_failed = true;
+}
+
+static void structured_extract_result(void *user, const xfu_entry *entry, bool success, bool partial)
+{
+    structured_result((structured_output *)user, entry, success, partial);
+}
+
 static int structured_end(structured_output *output, int status)
 {
     if (!output->output_failed) {
@@ -1406,6 +1434,7 @@ static int run_cli_arguments(int argc, char **argv, output_format initial_output
         request.callbacks.log = structured_log;
         request.callbacks.encryption = structured_encryption;
         if (!get_password && (request.command == XFU_COMMAND_LIST || request.command == XFU_COMMAND_EXTRACT)) request.callbacks.entry = structured_list_entry;
+        if (!get_password && request.command == XFU_COMMAND_EXTRACT) request.callbacks.extract_result = structured_extract_result;
         if (!get_password && request.command == XFU_COMMAND_TEST) request.callbacks.test_result = structured_test_result;
     } else if (advanced_listing) {
         request.callbacks.entry = console_advanced_entry;
