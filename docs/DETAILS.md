@@ -495,6 +495,18 @@ a file's stream, it makes the path unsafe (Base64 and uuencoded envelopes
 name their member after the part of the stored name that follows its last
 `/`, `\` or `:`).
 
+Add `--force` to `x` to keep the bytes of a member that decoded before its
+stream failed a check. The member's line says `PARTIAL`, with the bytes kept
+and, when the format records the size, the declared size; the run still
+returns `1`, and the summary counts it as partial rather than failed. A
+refused path, a filesystem failure and an encrypted member are never
+salvaged. Without the flag, such a member writes nothing and its line names
+`--force` as the remedy. A reader that cannot keep a decoded prefix still
+writes nothing with the flag, and the line says that no readable part was
+recovered. With `--json` or `--xml`, every extracted member also gets a
+`result` event carrying `success` and `partial`, so a salvaged member is
+distinguishable from a whole one without parsing the log text.
+
 The `a` command creates an archive and replaces an existing archive of a
 supported format. Common writable formats include 7z, ZIP, TAR, compressed TAR, raw GZIP,
 BZIP2 and XZ streams, CPIO and stored WIM. The native writers also support
@@ -543,6 +555,9 @@ archive onto the window. Double-click a folder or press Enter to enter it;
 **Up** or Backspace returns to its parent. Click a column heading to sort.
 The table shows names, sizes, packed sizes, modification dates, and stored
 attributes when the archive format provides them. Unknown values remain blank.
+The **Force** checkbox, enabled by default, gives **Extract** the same salvage
+as `--force` on the command line: a damaged member keeps the readable part of
+its stream, its line says `PARTIAL`, and the summary counts it as partial.
 
 Both the GUI and TUI have an editable **Password** field for listing, testing
 and extraction. A successfully opened archive autofills it when its reader
