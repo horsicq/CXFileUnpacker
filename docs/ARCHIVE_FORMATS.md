@@ -83,10 +83,11 @@ The launcher reader does not follow paths stored in the resource.
 ### Nuitka onefile
 
 The `nuitka_onefile` reader recognizes the Windows PE payload layout used by
-Nuitka 4.4. Run `xfu l app.exe` to list the payload or
+Nuitka 4.4 and older Zstandard-compressed `KAY` streams. Run `xfu l app.exe`
+to list the payload or
 `xfu x app.exe -ooutput` to recover the native program, DLLs, and bundled
 data. The reader supports stored and Zstandard-compressed bodies and embedded
-or appended payloads. Zstandard bodies have a 256 MiB decoded size limit.
+or appended payloads. Zstandard payloads have a 256 MiB decoded size limit.
 
 The recovered program is native code. Use this reader for onefile launchers
 with an embedded payload. A standalone directory already carries its files
