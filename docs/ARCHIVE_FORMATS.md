@@ -65,6 +65,33 @@ xfu x image.iso -ooutput
 xfu x input.bin --reader native:raw -ooutput
 ```
 
+### py2exe launchers
+
+`xfu l app.exe` identifies py2exe launchers by their `PYTHONSCRIPT` PE
+resource. Extract with `xfu x app.exe -ooutput`. The
+`0000-entry-scripts.pyc.marshal` member contains the original marshalled
+code objects, including the application entry script and py2exe startup
+code. The reader copies the bytecode without running it or reconstructing
+Python source.
+
+For launchers with an appended library, extraction also produces
+`0001-payload.zip`. You can open it with
+`xfu x output/0001-payload.zip --reader native:zip -omodules`.
+If py2exe shipped a separate `library.zip`, open that file independently.
+The launcher reader does not follow paths stored in the resource.
+
+### Nuitka onefile
+
+The `nuitka_onefile` reader recognizes the Windows PE payload layout used by
+Nuitka 4.4. Run `xfu l app.exe` to list the payload or
+`xfu x app.exe -ooutput` to recover the native program, DLLs, and bundled
+data. The reader supports stored and Zstandard-compressed bodies and embedded
+or appended payloads. Zstandard bodies have a 256 MiB decoded size limit.
+
+The recovered program is native code. Use this reader for onefile launchers
+with an embedded payload. A standalone directory already carries its files
+alongside the executable.
+
 ## Writing
 
 `--format=<name>` selects the container or wire variant. `--filter=<name>`

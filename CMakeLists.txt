@@ -262,6 +262,14 @@ if(BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_archive_feature_contract.py"
                 "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME xfu_py2exe_compat
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_py2exe_compat.py"
+                "$<TARGET_FILE:XFileUnpacker>")
+        add_test(NAME xfu_nuitka_onefile_compat
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_nuitka_onefile_compat.py"
+                "$<TARGET_FILE:XFileUnpacker>")
         add_test(NAME xfu_native_writers
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_writers.py"
