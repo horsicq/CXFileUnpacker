@@ -79,8 +79,9 @@ xfu a archive.zip alpha.txt --compression=deflate
 xfu a data.gz alpha.txt --format=raw --filter=gzip
 ```
 
-The writer validates all input files, options, and selectors before replacing
-the destination. Failed creation leaves an existing destination in place.
+The writer validates inputs, options, and selectors before replacing the
+destination. Ordinary file output uses staging. The in-place and stream
+exceptions are described below.
 Compression methods and levels depend on the chosen format or filter;
 unsupported combinations return an error. Use `xfu --capabilities` to see
 which named formats and filters are compiled into the current build.

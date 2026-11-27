@@ -3,8 +3,9 @@
 All three frontends share these native readers through xxfclib. Each format
 owns its source and public-header folders (`src/formats/<format>/` and
 `include/xxfclib/formats/<format>/`) and is registered through the ordinary
-`samples/unpack/xxfc_readers.c` reader table. They enumerate and decode actual contents. TEST decompresses in RAM and uses the usual percent
-progress; verbose mode retains member results. Input installers and extracted
+`src/xfileunpacker/xxfc_readers.c` reader table in xxfclib. These readers
+enumerate and decode supported contents. Testing uses memory and reports
+aggregate progress by default. Verbose mode shows each member's result. Input installers and extracted
 programs are never executed by these readers.
 
 | Family | Formats |

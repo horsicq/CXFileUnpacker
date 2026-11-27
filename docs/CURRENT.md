@@ -1,21 +1,24 @@
 # Supported formats
 
-Updated 2026-10-04. **1,613 file types** from
-XFileUnpacker's xxfclib catalog, including variants and the Binary fallback.
-This build excludes `die_engine`. The original 1,471-row table remains below;
-25 prior HxC rows and the additions appear in separate tables at the end.
-The catalog covers detection and inspection; listing and extraction depend on the
-supported variant. Media readers may export encoded components. Flat list:
-`xfu --formats --color=never`.
-ZIP also covers OOXML, OpenDocument, EPUB and CBZ containers.
-External 7-Zip engine handlers are disabled. Native 7z support and the
-in-process numbered-split reader remain available. Creation is enabled for 7z,
-ZIP, TAR, GZIP, BZIP2, XZ and stored WIM.
+Run `xfu --formats --color=never` for the live list of detection and inspection
+formats. The local Windows build of XFileUnpacker 0.1.7 reported **1,755 file
+types** on 2026-11-27, including variants and the Binary fallback. The number
+tracks the xxfclib sources selected at build time.
+
+The grouped tables below preserve the documented catalog snapshot from
+2026-10-04. Use the live list to resolve format IDs and names in newer builds.
+Listing and extraction depend on the supported variant, and media readers may
+export encoded components. ZIP detection also covers OOXML, OpenDocument,
+EPUB and CBZ containers.
+
+Native 7z and numbered split volumes are supported without an external
+7-Zip engine. The build can also write PEA, FreeArc and numbered split volumes
+through the in-process writers. See `xfu --capabilities` for compiled read and
+creation support.
 The [archive capability matrix](ARCHIVE_FORMATS.md) covers native archive
 creation, supported variants and independent stream filters.
 The [PeaZip comparison](PEAZIP_FORMATS.md) covers xxfclib-backed readers,
 retained PEA/FreeArc/split creation, suffix aliases and the remaining format gaps.
-`xfu --capabilities` reports the compiled read/create operations.
 Extensions are conventional or documented filename suffixes; **—** means no suffix is established here.
 
 The [HxC additions](HXC_FORMATS.md) add 23 structured disk/track readers,

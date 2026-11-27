@@ -1,7 +1,5 @@
 # XFileUnpacker reference
 
-Detailed behaviour notes, moved from the README.
-
 A C11 archive unpacker with three applications built from one CMake project:
 
 | Application | Interface |
@@ -36,8 +34,8 @@ include an `encrypted` flag on entries and typed `encryption` events. Failed
 decryption reports that the password may be incorrect or the encrypted data
 damaged; ordinary parse errors do not imply encryption.
 
-The native container readers cover 44 variants, including
-compressed streams, game/resource packages, disk wrappers and installers.
+Native container readers cover compressed streams, game and resource packages,
+disk wrappers and installers.
 The console, GUI and TUI use the same readers. See
 [native container formats](NATIVE_CONTAINER_FORMATS.md) for the format list and remaining limits.
 
@@ -223,7 +221,8 @@ xfu t archive.zip -pmy-password
 ```
 
 `xfu --formats` (or `xfu i`) lists every file type in xxfclib's format catalog.
-A compact grouped catalog is in [docs/CURRENT.md](CURRENT.md).
+See the [format catalog](CURRENT.md) for documented formats and how to query
+your build for its current list.
 The catalog includes new archive, disk, filesystem and partition readers.
 Extraction depends on the selected native reader and its documented limits;
 helper-backed handlers are unavailable in this build.
@@ -260,10 +259,17 @@ files are kept on cancellation.
 
 ## Source dependencies
 
-The build expects compatible xxfclib and xxwidgets source trees to exist
-locally. CMake uses `dep/xxfclib` and `dep/xxwidgets` by default; set
-`XFILEUNPACKER_XXFCLIB_DIR` and `XFILEUNPACKER_XXWIDGETS_DIR` when the prepared
-trees live elsewhere. Codec and archive implementation code is compiled from
+CMake expects compatible local sources in `dep/xxfclib` and `dep/xxwidgets`.
+In a Git checkout, populate them with `git submodule update --init --recursive`.
+In a prepared tree with the libraries in `../_mylibs`, configure from the
+CXFileUnpacker directory using PowerShell or a POSIX shell:
+
+```sh
+cmake -S . -B build-local '-DXFILEUNPACKER_XXFCLIB_DIR=../_mylibs/xxfclib' '-DXFILEUNPACKER_XXWIDGETS_DIR=../_mylibs/xxwidgets'
+```
+
+A CLI-only build can omit the xxwidgets path. On Windows you can pass the
+same `-D` arguments to `cmake --preset windows` or `cmake --preset windows-ninja`. Codec and archive implementation code is compiled from
 that xxfclib tree through `cmake/xxfclib_xfileunpacker.cmake`; the
 CXFileUnpacker tree supplies only frontends, shell integration, packaging and
 tests. Configuration does not use `FetchContent`, download codec sources, or
@@ -331,9 +337,11 @@ The default generator is Visual Studio 2022. To use Ninja instead, open the
 x64 Native Tools Command Prompt for VS 2022 first and set
 `CMAKE_GENERATOR_NAME=Ninja` before running the same command. The version is
 read from `release_version.txt`. A successful x64 build produces
-`release/xfileunpacker_win64_portable_0.1.4/` and
-`release/xfileunpacker_win64_portable_0.1.4.zip`; the executables are in the
-package's `bin/` directory.
+`release/xfileunpacker_win64_portable_<version>/` and
+`release/xfileunpacker_win64_portable_<version>.zip`. The executables are in
+the package's `bin/` directory. The script uses the default `dep/` layout.
+For a build configured with custom paths, use `cmake --install` or CPack
+with that build directory.
 
 ## Build on Linux and macOS
 
@@ -365,16 +373,16 @@ and `XFILEUNPACKER_XXWIDGETS_DIR`.
 ## GitHub Actions and Beta
 
 The build workflow packages Windows x64 and Ubuntu 24.04 on pushes and pull
-requests to `master`. It saves both ZIP files as workflow artifacts. Run the
-workflow manually from `master` to upload the packages to the existing `Beta`
-prerelease; that run also advances the `Beta` tag to the packaged commit.
-The hosted builds initialize the pinned dependency submodules recursively.
+requests to `master`. It saves both ZIP files as workflow artifacts. A push to
+`master` or a manual run on `master` also publishes the existing `Beta`
+prerelease and moves its tag when the packaged commit is still the tip of
+`master`. The hosted builds initialize the pinned dependency submodules
+recursively.
 
 ## Command line
 
-The commands, `-o<dir>` option, listing format, and diagnostic messages come
-from `xxfclib/samples/unpack/main.c`. The application name in the help text
-has been changed.
+Run `xfu --help` for the available commands and options. The CLI is implemented
+in `src/cli.c` and uses the shared xxfclib engine for archive operations.
 
 ```text
 xfu x <archive> [-o<dir>]     Extract with full paths
@@ -488,15 +496,18 @@ name their member after the part of the stored name that follows its last
 `/`, `\` or `:`).
 
 The `a` command creates an archive and replaces an existing archive of a
-supported format. Writable formats are `.7z`, `.zip`, `.tar`, `.gz`, `.bz2`,
-`.xz`, `.wim`, `.tar.gz` / `.tgz`, `.tar.bz2` / `.tbz2`, `.tar.xz` / `.txz`,
-`.tar.zst`, `.tar.lz4`, and `.cpio`. Raw GZIP, BZIP2 and XZ streams require one
-input file. `-p` also protects newly created 7z/ZIP archives; an empty password
+supported format. Common writable formats include 7z, ZIP, TAR, compressed TAR, raw GZIP,
+BZIP2 and XZ streams, CPIO and stored WIM. The native writers also support
+formats such as ISO 9660 and XAR. PEA, FreeArc and numbered split volumes use
+separate writers with their own input and output rules. See the
+[archive matrix](ARCHIVE_FORMATS.md) and run `xfu --capabilities` for the
+compiled operations. Raw streams require one regular input file. `-p` also protects newly created 7z/ZIP archives; an empty password
 (`-p` alone, or an empty `--password-env`) means none, for every format.
-A folder is added with everything it holds, an input named twice is stored
-once, and the new archive replaces the destination only when it is complete,
+For the ordinary archive writers, a folder is added with everything it holds
+and an input named twice is stored once. The new archive replaces the destination only when it is complete,
 so a refused input, a failure (a full disk too) or a Cancel leaves an existing
-archive as it was (see `docs/ARCHIVE_FORMATS.md`). A symbolic link named as an
+archive as it was in the normal staging path. The publication exceptions are
+covered in the [archive matrix](ARCHIVE_FORMATS.md). A symbolic link named as an
 input is stored as the file or folder it names; a link inside an added folder,
 or a file replaced after the folder was read, is refused. The new
 archive keeps the permissions of the one it replaces, and a destination that is
