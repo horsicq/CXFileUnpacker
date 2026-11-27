@@ -61,7 +61,7 @@ jobs:
           if-no-files-found: error
 
   publish-beta:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: [ubuntu, windows]
     runs-on: ubuntu-24.04
     permissions:
@@ -76,24 +76,32 @@ jobs:
           pattern: xfileunpacker-*
           merge-multiple: true
           path: release-assets
-      - name: Verify packages and current master
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Verify packages
+        shell: bash
         run: |
-          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 2
-          latest=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/master" --jq .object.sha)
-          test "$latest" = "$GITHUB_SHA"
+          shopt -s nullglob
+          ubuntu=(release-assets/xfileunpacker_ubuntu24_amd64_*.zip)
+          windows=(release-assets/xfileunpacker_win64_portable_*.zip)
+          if (( ${#ubuntu[@]} != 1 || ${#windows[@]} != 1 )); then
+            echo "::error::Expected one Ubuntu ZIP and one Windows ZIP."
+            exit 1
+          fi
       - name: Point Beta tag at packaged commit
+        id: beta-tag
         uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;
             const master = await github.rest.git.getRef({ owner, repo, ref: 'heads/master' });
             if (master.data.object.sha !== context.sha) {
-              throw new Error('master moved before the Beta release was uploaded');
+              core.notice('Skipping Beta: master moved while these packages were building.');
+              core.setOutput('publish', 'false');
+              return;
             }
             await github.rest.git.updateRef({ owner, repo, ref: 'tags/Beta', sha: context.sha, force: true });
+            core.setOutput('publish', 'true');
       - name: Upload to Beta release
+        if: steps.beta-tag.outputs.publish == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: Beta
